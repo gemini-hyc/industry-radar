@@ -1,0 +1,8 @@
+# Industry Radar 依赖（解释器：系统 python3，/usr/bin/python3）
+pandas>=2.0
+numpy
+scipy
+pyarrow
+
+# 仅行业成员拉取 / 富途分组同步需要（其余环节可不装）
+futu-api
