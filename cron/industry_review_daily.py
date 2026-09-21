@@ -1,10 +1,10 @@
 """行业跟踪日频 cron 入口
 
-用法: python /opt/data/quant/cron/industry_review_daily.py [--date YYYY-MM-DD]
+用法: python3 cron/industry_review_daily.py [--date YYYY-MM-DD]
 
 前置依赖:
-  - 数据引擎 (DE) 已完成日线拉取
-  - 行业加权涨跌幅已更新 (scripts/daily_weighted_update.sh)
+  - 日线行情已由共享数据源的 tushare fetch 任务更新（openclaw 16:16）
+  - 行业加权涨跌幅已更新 (scripts/compute_weighted_returns.py)
   - 拥挤度因子已更新 (scripts/update_industry_factor.py)
 
 本脚本会在运行前检查前置数据是否就绪：
@@ -18,13 +18,13 @@ from pathlib import Path
 
 
 def _find_project_root() -> Path:
-    """自动探测项目根目录，兼容容器和 macOS 开发环境"""
+    """自动探测项目根目录（本仓库优先，回退 hermes 旧仓库）"""
     # 优先从当前文件推断
     candidate = Path(__file__).resolve().parent.parent
     if (candidate / "src" / "daily_review" / "module_02_industry.py").exists():
         return candidate
     # 回退到已知路径
-    for p in ["/opt/data/quant", "/Users/hyc/.hermes/quant"]:
+    for p in ["/Users/hyc/quant/industry-radar", "/Users/hyc/.hermes/quant"]:
         pp = Path(p)
         if (pp / "src" / "daily_review" / "module_02_industry.py").exists():
             return pp
@@ -32,12 +32,9 @@ def _find_project_root() -> Path:
 
 
 def _detect_python() -> str:
-    """探测 Python 解释器路径"""
-    # 容器环境
-    venv_python = Path("/opt/hermes/.venv/bin/python")
-    if venv_python.exists():
-        return str(venv_python)
-    return sys.executable
+    """探测 Python 解释器路径（环境变量 PYTHON 可覆盖，默认当前解释器）"""
+    import os
+    return os.environ.get("PYTHON") or sys.executable
 
 
 def _run_update_script(project_root: Path, script_rel: str, desc: str) -> bool:
@@ -131,10 +128,10 @@ def _ensure_prerequisites(trade_date: str, project_root: Path) -> bool:
                 print("  ✅ 加权涨跌幅已补齐")
             else:
                 print("  ⚠️ 加权涨跌幅仍然缺失（可能 daily_basic 数据未拉取）")
-                print(f"  修复指引: 在容器中运行 scripts/daily_weighted_update.sh")
+                print(f"  修复指引: 手动运行 python3 {project_root}/scripts/compute_weighted_returns.py --days 5")
                 success = False
         else:
-            print(f"  修复指引: 手动运行 PYTHONPATH={project_root} python scripts/daily_weighted_update.sh")
+            print(f"  修复指引: 手动运行 python3 {project_root}/scripts/compute_weighted_returns.py --days 5")
             success = False
 
     if "crowding" in missing:
@@ -145,10 +142,10 @@ def _ensure_prerequisites(trade_date: str, project_root: Path) -> bool:
                 print("  ✅ 拥挤度因子已补齐")
             else:
                 print("  ⚠️ 拥挤度因子仍然缺失")
-                print(f"  修复指引: 手动运行 PYTHONPATH={project_root} python scripts/update_industry_factor.py")
+                print(f"  修复指引: 手动运行 python3 {project_root}/scripts/update_industry_factor.py")
                 success = False
         else:
-            print(f"  修复指引: 手动运行 PYTHONPATH={project_root} python scripts/update_industry_factor.py")
+            print(f"  修复指引: 手动运行 python3 {project_root}/scripts/update_industry_factor.py")
             success = False
 
     return success

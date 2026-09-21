@@ -25,9 +25,11 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
-# 项目路径
+# 项目路径（数据根统一走 src/paths.py：env INDUSTRY_RADAR_DATA > config.yaml > 默认共享数据目录）
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))  # 兼容脚本直跑: python3 src/daily_review/module_02_industry.py
+from src.paths import DATA_DIR
 
 # 数据路径常量
 WEIGHTED_RETURNS_PATH = DATA_DIR / "industry" / "industry_weighted_returns.parquet"

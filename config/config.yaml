@@ -1,0 +1,9 @@
+# Industry Radar 单一配置源
+# 数据根目录解析优先级: 环境变量 INDUSTRY_RADAR_DATA > 本文件 data_dir > 默认 /Users/hyc/quant-data
+
+data_dir: /Users/hyc/quant-data
+
+futu:
+  # 富途 OpenD 网关地址（macOS 本机直连；如在容器内运行改为 host.docker.internal）
+  host: localhost
+  port: 11111

@@ -3,12 +3,17 @@ Output: data/industry_universe.parquet with columns:
   industry, stock_count, stocks (list)
 Also adds industry_id column to stock_basic for quick lookup.
 """
+import sys
 import pandas as pd
 import numpy as np
 import json
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.paths import STOCK_BASIC_PATH, DATA_DIR
 
 # Load
-df = pd.read_parquet('/opt/data/quant-data/stock_basic.parquet')
+df = pd.read_parquet(STOCK_BASIC_PATH)
 
 # Filter: industries with >= 15 stocks
 ind_counts = df.groupby('industry').size().sort_values(ascending=False)
@@ -29,7 +34,7 @@ for ind in valid_industries:
     })
 
 ind_df = pd.DataFrame(universe)
-ind_df.to_parquet('/opt/data/quant-data/industry_universe.parquet', index=False)
+ind_df.to_parquet(DATA_DIR / 'industry_universe.parquet', index=False)
 print(f"\nindustry_universe.parquet saved: {len(ind_df)} rows")
 
 # Show bottom-end industries (smallest valid)

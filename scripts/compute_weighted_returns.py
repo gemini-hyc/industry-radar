@@ -10,11 +10,10 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, "/opt/data/quant")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-MARKET_DIR = Path("/opt/data/quant-data/market/daily")
-BASIC_DIR = Path("/opt/data/quant-data/daily_basic")
-INDUSTRY_DIR = Path("/opt/data/quant-data/industry")
+from src.paths import MARKET_DIR, BASIC_DIR, INDUSTRY_DIR
+
 OUT_PATH = INDUSTRY_DIR / "industry_weighted_returns.parquet"
 
 
