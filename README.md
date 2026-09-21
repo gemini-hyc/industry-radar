@@ -42,7 +42,10 @@ cd ~/quant/industry-radar
 python3 scripts/pull_futu_industry.py          # 周更：行业成员映射（限频 30s/10次，约10分钟）
 python3 scripts/compute_weighted_returns.py    # 日更：加权涨跌幅
 python3 scripts/update_industry_factor.py      # 日更：拥挤度因子
+python3 scripts/build_industry_daily_full.py   # 低频：行业日频全量数据集（月更/成员变更后）
 python3 scripts/industry_tracker.py            # 日更：反转跟踪
+python3 scripts/mainline_detector.py           # 日更：主线探测
+python3 scripts/regime_classifier.py           # 日更：行情类型 regime
 python3 cron/industry_review_daily.py          # 日更：行业跟踪报告（自动检查+补齐前置）
 python3 scripts/sync_industries_to_futu.py     # 手动：行业分组同步富途
 ```
