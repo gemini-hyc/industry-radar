@@ -3,27 +3,30 @@
 行业因子日频增量更新
 ===================
 每天运行一次，追加最新交易日的 ind_crowd_turnover 因子值。
-运行时机: DE 完成后 (16:16 CST 之后)
+运行时机: 共享数据源的日线拉取完成后 (16:16 CST 之后)
 
 输入:
-  - data/market/daily/ (最新日线)
-  - data/industry/industry_members.parquet (富途申万二级行业映射)
+  - market/daily/ (最新日线)
+  - industry/industry_members.parquet (富途申万二级行业映射)
 
 输出:
-  - 更新 data/factors/ind_crowd_turnover_daily.parquet
+  - 更新 factors/ind_crowd_turnover_daily.parquet
 
-用法: PYTHONPATH=/opt/data/quant python scripts/update_industry_factor.py
+用法: python3 scripts/update_industry_factor.py
 """
 
 import sys, os, glob
-sys.path.insert(0, "/opt/data/quant")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 import numpy as np
 
-DAILY_DIR = "/opt/data/quant-data/market/daily"
-FACTOR_DIR = "/opt/data/quant-data/factors"
-INDUSTRY_DIR = "/opt/data/quant-data/industry"
+from src.paths import MARKET_DIR, FACTOR_DIR, INDUSTRY_DIR
+
+DAILY_DIR = MARKET_DIR
+FACTOR_DIR = FACTOR_DIR
+INDUSTRY_DIR = INDUSTRY_DIR
 
 
 def main():

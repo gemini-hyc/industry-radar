@@ -12,15 +12,15 @@ import json
 from pathlib import Path
 from datetime import datetime, date
 
-FUTU_HOST = "host.docker.internal"
-FUTU_PORT = 11111
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.paths import FUTU_HOST, FUTU_PORT, INDUSTRY_DIR
+
 GROUP_NAME = "行业"
 MAX_ITEMS  = 25
 STORY_SCORE_MIN = 50
 
-DATA_DIR = Path("/opt/data/quant-data")
-TRACKER_STATE_PATH = DATA_DIR / "industry" / "tracker_state.json"
-INDUSTRY_LIST_PATH = DATA_DIR / "industry" / "industry_list.parquet"
+TRACKER_STATE_PATH = INDUSTRY_DIR / "tracker_state.json"
+INDUSTRY_LIST_PATH = INDUSTRY_DIR / "industry_list.parquet"
 
 
 def load_tracking_industries() -> list[dict]:

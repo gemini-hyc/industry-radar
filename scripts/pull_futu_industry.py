@@ -2,7 +2,7 @@
 """
 行业板块数据拉取 — 富途OpenD版
 
-通过 host.docker.internal:11111 连接宿主机上的富途OpenD网关，
+通过 config/config.yaml 配置的 OpenD 网关（默认 localhost:11111）连接富途，
 拉取行业板块(Plate.INDUSTRY)列表和成分股，保存为 parquet 格式。
 
 输出格式与概念板块兼容：
@@ -16,9 +16,10 @@ import time
 import pandas as pd
 from pathlib import Path
 
-FUTU_HOST = "host.docker.internal"
-FUTU_PORT = 11111
-OUTPUT_DIR = Path("/opt/data/quant-data/industry")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.paths import FUTU_HOST, FUTU_PORT, INDUSTRY_DIR
+
+OUTPUT_DIR = INDUSTRY_DIR
 
 # 富途API限制: 30秒最多10次板块成分股查询
 PLATE_MIN_INTERVAL = 3.0

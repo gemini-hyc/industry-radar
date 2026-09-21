@@ -12,17 +12,23 @@
 6. 埋伏候选识别
 """
 
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.paths import INDUSTRY_DIR
+
 
 def load_data():
     """加载所有必要数据"""
-    returns = pd.read_parquet('data/industry/industry_weighted_returns.parquet')
-    idf = pd.read_parquet('data/industry/industry_daily_full.parquet')
-    il = pd.read_parquet('data/industry/industry_list.parquet')
+    returns = pd.read_parquet(INDUSTRY_DIR / 'industry_weighted_returns.parquet')
+    idf = pd.read_parquet(INDUSTRY_DIR / 'industry_daily_full.parquet')
+    il = pd.read_parquet(INDUSTRY_DIR / 'industry_list.parquet')
     name_map = dict(zip(il['ts_code'], il['name']))
     
     # 成交额占比
@@ -343,8 +349,8 @@ def run_full_detection(reference_date=None):
         print(f"     行业: {', '.join(r['group_names'][:6])}")
     
     # 保存结果
-    results.to_csv('data/industry/mainline_detection.csv', index=False)
-    print(f"\n结果已保存到 data/industry/mainline_detection.csv")
+    results.to_csv(INDUSTRY_DIR / 'mainline_detection.csv', index=False)
+    print(f"\n结果已保存到 {INDUSTRY_DIR / 'mainline_detection.csv'}")
     
     return results, group_signals, valid_groups, corr_matrix
 

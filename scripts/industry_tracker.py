@@ -13,15 +13,14 @@ from datetime import datetime, date
 import pandas as pd
 import numpy as np
 
-# ── 配置 ──────────────────────────────────────
-DATA_ROOT = Path("/opt/data/quant")
-INDUSTRY_DIR = DATA_ROOT / "data" / "industry"
+# ── 配置（统一走 src/paths.py，消除容器路径硬编码）──
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.paths import INDUSTRY_DIR, FACTOR_DIR
 
-sys.path.insert(0, str(DATA_ROOT))
 STATE_FILE = INDUSTRY_DIR / "tracker_state.json"
 REPORT_FILE = INDUSTRY_DIR / "tracker_report.csv"
 WEIGHTED_PATH = INDUSTRY_DIR / "industry_weighted_returns.parquet"
-CROWD_FACTOR_PATH = DATA_ROOT / "data" / "factors" / "ind_crowd_turnover_daily.parquet"
+CROWD_FACTOR_PATH = FACTOR_DIR / "ind_crowd_turnover_daily.parquet"
 
 # 反转信号阈值
 REVERSAL_BREADTH_MAX    = 0.45   # C1 沉睡上限（20日均宽度<45%）

@@ -8,29 +8,17 @@
 """
 import json
 import os
+import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
+# 数据根统一走 src/paths.py（env INDUSTRY_RADAR_DATA > config.yaml > 默认共享数据目录）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
-def _resolve_data_root() -> Path:
-    """解析数据根目录，适配开发机(macOS)与生产容器双环境"""
-    # 1. 环境变量优先
-    env_root = os.environ.get("HERMES_DATA_DIR")
-    if env_root:
-        return Path(env_root)
-    # 2. 生产容器路径
-    prod_root = Path("/opt/data/quant")
-    if prod_root.exists():
-        return prod_root
-    # 3. 开发环境：从本模块位置推断项目根目录
-    module_dir = Path(__file__).resolve().parent  # src/utils/
-    return module_dir.parent.parent  # 项目根目录
-
-
-DATA_ROOT = _resolve_data_root()
-MARKET_DIR = DATA_ROOT / "data/market/daily"
-INDUSTRY_DIR = DATA_ROOT / "data/industry"
+from src.paths import DATA_DIR, MARKET_DIR, INDUSTRY_DIR
 
 
 # ── 行情加载 ──────────────────────────────────

@@ -17,12 +17,16 @@
 - 偏弱轮动: up_pct<40% 且 rank_autocorr<0.1（多数行业不涨，但领涨的行业也在换）
 """
 
+import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
-DATA_PATH = Path('/opt/data/quant-data/industry/industry_weighted_returns.parquet')
-OUT_PATH = Path('/opt/data/quant-data/industry/daily_regime.parquet')
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.paths import INDUSTRY_DIR
+
+DATA_PATH = INDUSTRY_DIR / 'industry_weighted_returns.parquet'
+OUT_PATH = INDUSTRY_DIR / 'daily_regime.parquet'
 
 # ============================================================
 # 1. 加载数据
@@ -231,28 +235,32 @@ print("\n" + "="*80)
 print("策略适配验证：不同行情类型下哪些因子有效")
 print("="*80)
 
-# 加载唤醒回测明细
-detail = pd.read_csv('/opt/data/quant-data/industry/wake_backtest_v2_detail.csv')
-detail['date'] = pd.to_datetime(detail['wake_date'])
+# 加载唤醒回测明细（可选：明细文件缺失时跳过本节验证）
+_wake_detail_path = INDUSTRY_DIR / 'wake_backtest_v2_detail.csv'
+if _wake_detail_path.exists():
+    detail = pd.read_csv(_wake_detail_path)
+    detail['date'] = pd.to_datetime(detail['wake_date'])
 
-# 给每个唤醒事件标注行情类型
-daily_regime_map = dict(zip(daily_df['date'].dt.strftime('%Y-%m-%d'), daily_df['regime']))
-detail['regime'] = detail['date'].dt.strftime('%Y-%m-%d').map(daily_regime_map)
+    # 给每个唤醒事件标注行情类型
+    daily_regime_map = dict(zip(daily_df['date'].dt.strftime('%Y-%m-%d'), daily_df['regime']))
+    detail['regime'] = detail['date'].dt.strftime('%Y-%m-%d').map(daily_regime_map)
 
-print("\n唤醒事件在不同行情下的分布:")
-regime_events = detail.groupby('regime')['name'].nunique()
-for r, n in regime_events.items():
-    print(f"  {r}: {n}个行业")
+    print("\n唤醒事件在不同行情下的分布:")
+    regime_events = detail.groupby('regime')['name'].nunique()
+    for r, n in regime_events.items():
+        print(f"  {r}: {n}个行业")
 
-print("\n唤醒5日超额 by regime:")
-for regime in detail['regime'].unique():
-    if pd.isna(regime):
-        continue
-    sub = detail[(detail['regime'] == regime) & (detail['horizon_target'] == 5)]
-    if len(sub) < 3:
-        print(f"  {regime}: n={len(sub)}, 样本不足")
-        continue
-    print(f"  {regime}: n={len(sub)}, 超额={sub['excess'].mean():.2f}%, 胜率={(sub['excess']>0).mean():.0%}")
+    print("\n唤醒5日超额 by regime:")
+    for regime in detail['regime'].unique():
+        if pd.isna(regime):
+            continue
+        sub = detail[(detail['regime'] == regime) & (detail['horizon_target'] == 5)]
+        if len(sub) < 3:
+            print(f"  {regime}: n={len(sub)}, 样本不足")
+            continue
+        print(f"  {regime}: n={len(sub)}, 超额={sub['excess'].mean():.2f}%, 胜率={(sub['excess']>0).mean():.0%}")
+else:
+    print(f"\n⚠️ 唤醒回测明细不存在，跳过策略适配验证: {_wake_detail_path}")
 
 # ============================================================
 # 8. 保存
