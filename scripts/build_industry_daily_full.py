@@ -7,10 +7,14 @@
 本脚本补上生成器，供 mainline_detector / 回测脚本使用。
 
 用法: python3 scripts/build_industry_daily_full.py [--days 2000]
+
+日更建议: --days 60（breadth 依赖 MA20/MA13，需 ≥33 天预热；按日期 upsert 不截断历史）
 """
 import sys
 import argparse
 from pathlib import Path
+
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -40,6 +44,23 @@ def main(days: int = 2000):
     if daily.empty:
         print("❌ 聚合结果为空")
         return 1
+
+    # ── 按日期 upsert（不可整文件覆盖：日更只算近 --days 天，覆盖写会截断历史）──
+    key = ["date", "con_code"]
+    if OUT_PATH.exists() and all(k in daily.columns for k in key):
+        try:
+            prev = pd.read_parquet(OUT_PATH)
+            if all(k in prev.columns for k in key):
+                d_new = pd.to_datetime(daily["date"])
+                d_old = pd.to_datetime(prev["date"])
+                lo, hi = d_new.min(), d_new.max()
+                kept = prev[(d_old < lo) | (d_old > hi)]
+                daily = pd.concat([kept, daily], ignore_index=True)
+                daily = daily.drop_duplicates(subset=key, keep="last")
+                daily = daily.sort_values(key).reset_index(drop=True)
+                print(f"  upsert: 保留窗口外 {len(kept)} 条，本次覆盖 {lo.date()} ~ {hi.date()}")
+        except Exception as e:
+            print(f"  ⚠️ upsert 跳过（{e}），按本次结果覆盖写入")
 
     daily.to_parquet(OUT_PATH, index=False)
     print(f"✅ 已保存 {OUT_PATH}")

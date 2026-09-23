@@ -56,6 +56,8 @@ MARKET_DIR = DATA_DIR / "market" / "daily"          # 日线行情
 BASIC_DIR = DATA_DIR / "daily_basic"                # 每日市值（tushare fetch 任务维护）
 INDUSTRY_DIR = DATA_DIR / "industry"                # 行业数据与状态
 FACTOR_DIR = DATA_DIR / "factors"                   # 因子库
+SIGNALS_DIR = DATA_DIR / "signals"                  # 信号台账与评估（验证底座）
+SIGNALS_LOG_PATH = SIGNALS_DIR / "signals_log.parquet"  # 全系统信号台账
 REPORTS_DIR = DATA_DIR / "reports" / "daily-analysis"  # 日报输出
 STOCK_BASIC_PATH = DATA_DIR / "stock_basic.parquet"  # 股票列表
 
