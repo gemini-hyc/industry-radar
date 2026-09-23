@@ -3,6 +3,7 @@ pandas>=2.0
 numpy
 scipy
 pyarrow
+pyyaml   # config/config.yaml 解析（src/paths.py，缺失时静默回退默认路径）
 
 # 仅行业成员拉取 / 富途分组同步需要（其余环节可不装）
 futu-api

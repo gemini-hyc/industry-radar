@@ -151,12 +151,46 @@ def _ensure_prerequisites(trade_date: str, project_root: Path) -> bool:
     return success
 
 
+def _run_completeness_check(project_root: Path, trade_date: str) -> int:
+    """
+    运行数据完备性检查（防静默缺数：整行缺失 / 列级空洞 / 成分骤降）
+
+    返回退出码: 0 健康 / 1 严重(CRITICAL) / 2 警告(WARNING) / 3 非交易日跳过
+    """
+    python = _detect_python()
+    script = project_root / "scripts" / "check_data_completeness.py"
+    if not script.exists():
+        print("  ⚠️ 完备性检查脚本不存在，跳过（scripts/check_data_completeness.py）")
+        return 0
+
+    env = {"PYTHONPATH": str(project_root), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    try:
+        r = subprocess.run(
+            [python, str(script), "--date", trade_date],
+            cwd=str(project_root), env=env,
+            capture_output=True, text=True, timeout=180,
+        )
+        if r.stdout.strip():
+            print(r.stdout.strip())
+        if r.stderr.strip():
+            print(f"  stderr: {r.stderr.strip()[-400:]}")
+        return r.returncode
+    except subprocess.TimeoutExpired:
+        print("  ❌ 完备性检查超时（>3分钟）")
+        return 1
+    except Exception as e:
+        print(f"  ❌ 完备性检查异常: {e}")
+        return 1
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="行业跟踪日报")
     parser.add_argument("--date", type=str, default=None, help="交易日期 YYYY-MM-DD，默认今天")
     parser.add_argument("--skip-check", action="store_true", help="跳过前置数据检查（调试用）")
+    parser.add_argument("--skip-completeness", action="store_true",
+                        help="跳过数据完备性检查（调试用）")
     args = parser.parse_args()
 
     project_root = _find_project_root()
@@ -176,4 +210,53 @@ if __name__ == "__main__":
     from src.daily_review.module_02_industry import run
 
     report = run(trade_date)
+
+    # ── 追加链路其余产出（跟踪池 / 主线 / regime）──
+    # 只读现有产出，不重算、不改 module_02 口径；任一环节异常都不影响主报告
+    extra = ""
+    try:
+        from src.daily_review.report_sections import append_to_report, build_extra_sections
+
+        extra = build_extra_sections(trade_date)
+        if append_to_report(trade_date, extra) is None:
+            extra = ""  # 主报告未落盘（非交易日/写入失败）→ 附加章节也不展示
+        else:
+            print("\n[附加章节] 已追加 跟踪池 / 主线状态 / 行情 regime 至报告文件")
+    except Exception as e:
+        extra = ""
+        print(f"⚠️ 附加章节生成失败（不影响主报告）: {e}")
+
     print(report)
+    if extra:
+        print(extra)
+
+    # ── 数据完备性检查（防静默缺数）──
+    # 报告已落盘后再检查：目标是暴露「文件有行但行业/列悄悄为空」的情况
+    if not args.skip_completeness:
+        print()
+        print("🔎 数据完备性检查…")
+        rc = _run_completeness_check(project_root, trade_date)
+        if rc == 1:
+            print(f"\n❌ 检测到严重缺数，{trade_date} 报告可能不完整，请按上方指引修复后重跑。")
+            sys.exit(1)
+        elif rc == 2:
+            print("\n⚠️ 存在非致命数据异常（报告仍可用），建议按上方指引排查。")
+        elif rc == 3:
+            print(f"⏭️  {trade_date} 非交易日，跳过完备性检查。")
+
+    # ── 信号台账：当日快照入账 + 前向收益回填（验证底座）──
+    # 放在完备性检查之后：只有数据通过检查才登记信号，避免坏数据污染台账
+    try:
+        from src.signals import ledger as _ledger
+        from src.signals.sources import snapshot_signals
+
+        snapshots = snapshot_signals(trade_date)
+        led = _ledger.load_ledger()
+        before = len(led)
+        led = _ledger.upsert(led, snapshots)
+        led = _ledger.backfill_forward_returns(led)
+        path = _ledger.save_ledger(led)
+        print(f"\n[信号台账] {trade_date} 快照 {len(snapshots)} 条；"
+              f"台账 {before} → {len(led)} 条 → {path}")
+    except Exception as e:
+        print(f"⚠️ 信号台账更新失败（不影响主报告）: {e}")
