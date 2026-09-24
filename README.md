@@ -154,6 +154,9 @@ docs/         设计文档与回测结论存档
 
 ## 与 Hermes 的关系
 
-- 代码抽取自 `~/.hermes/quant`（v0 基线 commit 与源逐字节一致，可 diff 追溯）
+- 代码抽取自 `~/.hermes/quant`（v0 基线 commit 与源逐字节一致）
+- **Hermes 侧已于 2026-09-24 退出 git 仓库状态**：`.git` 已移除，工作树文件原样保留（6068 个文件未动）。
+  全部历史（`master` / 9 个提交）归档在 `~/.hermes/quant-git-backup-20260924.tar.gz`，
+  提交清单见 `~/.hermes/quant-git-log-20260924.txt`；需要逐字节 diff 追溯时解包该备份即可
 - Hermes 侧原文件暂不删除；切换调度前旧链路保持运行
 - 本仓库是行业链路的唯一演进方向，后续修改完善在此进行
