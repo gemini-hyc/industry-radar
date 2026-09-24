@@ -198,6 +198,143 @@ def check_hygiene(t: pd.Timestamp):
     return out, stats
 
 
+# ── 情绪数据（批次2，2026-09-24 接入）──
+SENTI_DIR = DATA_DIR / "sentiment"
+SENTI_DAILY = SENTI_DIR / "sentiment_daily.parquet"
+# 这五个当日 18:30 即可取到；margin_detail 是 T+1 发布，只能等次日
+SENTI_SAME_DAY = ["top_list", "top_inst", "block_trade", "hsgt_top10", "hk_hold"]
+MARGIN_BAL_RANGE = (0.3e12, 6e12)   # 两融余额合理区间（元）
+BLOCK_AMT_RANGE_YI = (5.0, 200.0)   # 大宗成交额日中位数合理区间（亿元，A股口径）
+
+
+def check_sentiment(t: pd.Timestamp):
+    """1c. 情绪数据（两融/龙虎榜/大宗/北向）—— 批次2 新增。
+
+    关注点与行情不同：
+      · margin_detail 是 **T+1 发布**，当日 19:30 必然拿不到当日值 → 查 t-1 即可，
+        否则会天天误报。
+      · 北向三接口在 2024-08-19 有披露口径断点（hk_hold 只剩港股通），
+        空值合法性由 check_sentiment.py 用 hk_trade_cal 判定，这里只查文件在不在。
+    """
+    out, stats = [], {}
+    if not SENTI_DIR.exists():
+        out.append(issue(
+            WARNING, "SENTI_DIR_MISSING",
+            f"情绪数据目录不存在: {SENTI_DIR}",
+            fix="跑 scripts/fetch_sentiment.py --full 建库",
+            date=str(t.date())))
+        return out, stats
+
+    def nrows(p):
+        try:
+            import pyarrow.parquet as pq
+            return pq.ParquetFile(p).metadata.num_rows
+        except Exception:
+            return -1
+
+    for name in SENTI_SAME_DAY:
+        p = SENTI_DIR / name / f"{t:%Y-%m-%d}.parquet"
+        if not p.exists():
+            out.append(issue(
+                CRITICAL, "SENTI_MISSING",
+                f"{name} 缺当日文件 {p.name}",
+                fix="确认 18:30 stock-doctor 链里的 fetch_sentiment 已执行",
+                date=str(t.date())))
+        elif nrows(p) == 0:
+            stats[f"{name}_empty"] = True   # 空值合法性由 check_sentiment.py 判定
+
+    # 两融：T+1（margin_detail 明细 + margin_summary 官方汇总，同源同发布节奏）
+    pt = prev_trade_day(t)
+    for nm in ("margin_detail", "margin_summary"):
+        mp = SENTI_DIR / nm / f"{pt:%Y-%m-%d}.parquet"
+        if not mp.exists() or nrows(mp) == 0:
+            out.append(issue(
+                WARNING, "SENTI_MARGIN_LAG",
+                f"{nm} 缺 {pt:%Y-%m-%d}（两融 T+1 发布，滞后 2 日以上）",
+                fix="跑 fetch_sentiment.py --days 7 自愈",
+                date=str(t.date())))
+        elif nm == "margin_summary":
+            # 结构行数校验（2026-09-24 新增）：`margin` 是交易所分批发布，
+            # **深交所晚于上交所**。实测当日只有 2 行（BSE+SSE）就落盘 → margin_bal
+            # 从 2.66 万亿假崩到 1.37 万亿（−48.5%），而 1.37 万亿恰好落在
+            # MARGIN_BAL_RANGE 内 → **量级哨兵也抓不到**。只有查行数结构才抓得到。
+            # 判据：2023-02-13（北交所两融开通）前应 2 行，之后应 3 行。
+            need = 3 if pt >= pd.Timestamp("2023-02-13") else 2
+            got = nrows(mp)
+            if 0 < got < need:
+                out.append(issue(
+                    CRITICAL, "SENTI_MARGIN_THIN",
+                    f"margin_summary {pt:%Y-%m-%d} 仅 {got} 行（应 ≥{need} 行）"
+                    f"——疑似交易所尚未发布齐，该日两融余额会明显偏低",
+                    fix="删掉该残缺文件后跑 fetch_sentiment.py --days 7"
+                        "（抓取器已改为「行数不足不落盘」，此告警表示历史遗留坏文件）",
+                    date=str(t.date())))
+
+    # 同类的结构残缺还有 hsgt_top10：**固定 20 行**（10 沪 + 10 深），
+    # 实测 1044 个非空文件行数取值只有一种，且 2024-08-19 北向披露口径变化后仍是 20。
+    # 行数少于 20 说明只发布了半个市场（沪或深），量级会直接腰斩而"文件在"检查看不见。
+    hp = SENTI_DIR / "hsgt_top10" / f"{pt:%Y-%m-%d}.parquet"
+    if hp.exists():
+        got = nrows(hp)
+        if 0 < got < 20:
+            out.append(issue(
+                CRITICAL, "SENTI_HSGT_THIN",
+                f"hsgt_top10 {pt:%Y-%m-%d} 仅 {got} 行（应 ≥20 行=10沪+10深）"
+                f"——疑似只发布了单边市场",
+                fix="删掉该残缺文件后跑 fetch_sentiment.py --days 7",
+                date=str(t.date())))
+
+    if SENTI_DAILY.exists():
+        try:
+            sd = pd.read_parquet(SENTI_DAILY)
+            if len(sd):
+                sd["date"] = pd.to_datetime(sd["date"])
+                mx = sd["date"].max()
+                stats["sentiment_daily_max"] = str(mx.date())
+                stats["sentiment_daily_rows"] = len(sd)
+                if mx < t:
+                    out.append(issue(
+                        WARNING, "SENTI_DAILY_STALE",
+                        f"情绪汇总表最新只到 {mx:%Y-%m-%d}，落后目标日 {t:%Y-%m-%d}",
+                        fix="跑 scripts/build_sentiment_daily.py --days 60",
+                        date=str(t.date())))
+                # 量级探针：单位/口径跳变会让两融余额离谱
+                bal = sd["margin_bal"].dropna()
+                if len(bal):
+                    stats["margin_bal"] = float(bal.iloc[-1])
+                    if not (MARGIN_BAL_RANGE[0] <= bal.iloc[-1] <= MARGIN_BAL_RANGE[1]):
+                        out.append(issue(
+                            CRITICAL, "SENTI_MARGIN_SCALE",
+                            f"两融余额 {bal.iloc[-1]:.3e} 超出合理区间（单位/口径可能变了）",
+                            fix="margin_bal 取自官方汇总 margin_summary（含北交所）；"
+                                "检查该表是否只拉到部分交易所",
+                            date=str(t.date())))
+                # 量级探针：block_trade 里股票(万元)与债券(元)单位不同，
+                # 未按证券类型筛分时 2020 日均会虚高 ~1 万倍（2026-09-24 踩过，静默无报错）
+                if "block_amt" in sd.columns:
+                    ba = sd["block_amt"].dropna()
+                    if len(ba):
+                        med_yi = float(ba.median()) / 1e8
+                        stats["block_amt_median_yi"] = round(med_yi, 2)
+                        if not (BLOCK_AMT_RANGE_YI[0] <= med_yi <= BLOCK_AMT_RANGE_YI[1]):
+                            out.append(issue(
+                                CRITICAL, "SENTI_BLOCK_SCALE",
+                                f"大宗成交额中位 {med_yi:.1f} 亿超出合理区间 {BLOCK_AMT_RANGE_YI}"
+                                "（疑似证券类型单位混用：股票万元 vs 债券元）",
+                                fix="跑 scripts/build_sentiment_daily.py --full（只取 A 股）",
+                                date=str(t.date())))
+        except Exception as e:
+            out.append(issue(WARNING, "SENTI_DAILY_FAIL", f"情绪汇总表检查异常: {e}"))
+    else:
+        out.append(issue(
+            WARNING, "SENTI_DAILY_MISSING",
+            f"情绪汇总表不存在: {SENTI_DAILY}",
+            fix="跑 scripts/build_sentiment_daily.py --full",
+            date=str(t.date())))
+
+    return out, stats
+
+
 def expected_industries():
     """期望行业全集 = 静态成员快照的 ind_code（长期稳定的 131 个）"""
     m = pd.read_parquet(MEMBERS_PATH, columns=["ind_code"])
@@ -411,6 +548,9 @@ def main():
     hy_issues, hy_stats = check_hygiene(t)
     issues += hy_issues
     report["summary"]["hygiene"] = hy_stats
+    se_issues, se_stats = check_sentiment(t)
+    issues += se_issues
+    report["summary"]["sentiment"] = se_stats
     wr_issues, wr_stats = check_weighted_returns(t, expected)
     issues += wr_issues
     report["summary"]["weighted_returns"] = wr_stats
@@ -460,6 +600,24 @@ def print_report(report: dict, msg: str = ""):
             fu = s.get("daily_full") or {}
             if fu:
                 print(f"  等权源    : 最新 {fu.get('latest', '?')}")
+            # 批次2 情绪数据（2026-09-24 加）：原先只写进 JSON、终端不显示，
+            # 违反「监控必须可见」——数值异常时人看不到，等于没监控。
+            se = s.get("sentiment") or {}
+            if se:
+                bits = []
+                if se.get("sentiment_daily_max"):
+                    bits.append(f"汇总表 {se['sentiment_daily_max']}"
+                                f"({se.get('sentiment_daily_rows', '?')}行)")
+                if se.get("margin_bal"):
+                    bits.append(f"两融 {se['margin_bal'] / 1e12:.3f}万亿")
+                if se.get("block_amt_median_yi") is not None:
+                    bits.append(f"大宗中位 {se['block_amt_median_yi']:.1f}亿")
+                empty = [k[:-6] for k, v in se.items()
+                         if k.endswith("_empty") and v]
+                if empty:
+                    bits.append("空值: " + ",".join(empty))
+                if bits:
+                    print("  情绪数据  : " + " / ".join(bits))
     if report["issues"]:
         print()
         for it in report["issues"]:
