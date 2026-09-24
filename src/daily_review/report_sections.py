@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -215,14 +216,94 @@ def format_regime_section(trade_date: str) -> str:
     return "\n".join(lines)
 
 
+# ── 七、冷区信号资金面参考 ────────────────────────────────
+
+_TIER_LABEL = {"high": "★★ 高置信", "standard": "★★ 标准", "watch": "★ 观察"}
+
+
+def _industry_names() -> Dict[str, str]:
+    try:
+        il = pd.read_parquet(INDUSTRY_DIR / "industry_list.parquet")
+        return dict(zip(il["ts_code"].astype(str), il["name"].astype(str)))
+    except Exception:
+        return {}
+
+
+def format_margin_section(trade_date: str) -> str:
+    """
+    冷区信号的两融占比分位（展示列，不参与信号规则）。
+
+    实证依据（docs/sentiment-data-evaluation.md）：2024-09~2026-09 的 583 条冷区信号中，
+    低分位组 20 日超额 −1.67pp / 胜率 36.9%，高分位组 +1.50pp / 51.2%，且 2025/2026 两年一致。
+    因此仅作展示与观察，暂不进入信号判定。
+    """
+    lines: List[str] = ["📊 **七、冷区信号资金面参考**（两融余额 / 流通市值分位）", ""]
+    try:
+        from src.signals.sentiment import percentile_series
+        pct = percentile_series(trade_date)
+    except Exception as e:
+        logger.warning("两融占比数据不可用: %s", e)
+        lines += [f"> ⚠️ 两融占比数据不可用：{e}", ""]
+        return "\n".join(lines)
+
+    if pct is None or len(pct) == 0:
+        lines += [f"> 尚无 {trade_date} 的两融占比数据（面板未覆盖该日）。", ""]
+        return "\n".join(lines)
+
+    # 当日冷区信号取自 module_02 结论 JSON（避免重算，保持与报告口径一致）
+    signals: List[dict] = []
+    try:
+        p = REPORTS_DIR / f"{trade_date}_module_02_conclusion.json"
+        if p.exists():
+            signals = json.loads(p.read_text(encoding="utf-8")).get("cold_zone_signals") or []
+    except Exception as e:
+        logger.warning("读取冷区信号失败: %s", e)
+
+    lines += [
+        "> 分位越高 = 杠杆资金参与越深。实证（583 条冷区信号，20 日超额）：",
+        "> 低分位 **−1.67pp / 胜率 36.9%**　中分位 +0.28pp / 47.1%　高分位 **+1.50pp / 51.2%**",
+        "> 仅作参考展示，尚未进入信号规则。",
+        "",
+    ]
+
+    if signals:
+        lines += [
+            "| 行业 | 级别 | 前20日均宽 | 两融占比分位 | 参考 |",
+            "|:-----|:----:|:----------:|:-----------:|:----:|",
+        ]
+        for s in signals:
+            v = pct.get(s.get("industry_code"))
+            has = v is not None and not pd.isna(v)
+            v_txt = f"{float(v) * 100:.0f}%" if has else "—"
+            tag = ("偏高" if float(v) >= 0.67 else "偏低" if float(v) <= 0.33 else "中性") if has else "—"
+            tier = _TIER_LABEL.get(str(s.get("tier")), str(s.get("tier", "")))
+            lines.append(
+                f"| {s.get('industry_name', '')} | {tier} "
+                f"| {_fmt(s.get('pre_breadth_20d'), '.0f', '%')} | {v_txt} | {tag} |"
+            )
+        lines.append("")
+    else:
+        names = _industry_names()
+        top = pct.nlargest(3)
+        bot = pct.nsmallest(3)
+        lines += [
+            f"> 今日无冷区信号。全行业两融占比分位中位数 **{pct.median() * 100:.0f}%**；"
+            f"最高：{'、'.join(names.get(c, c) for c in top.index)}；"
+            f"最低：{'、'.join(names.get(c, c) for c in bot.index)}",
+            "",
+        ]
+    return "\n".join(lines)
+
+
 # ── 组装与落盘 ────────────────────────────────────────────
 
 def build_extra_sections(trade_date: str) -> str:
-    """渲染四/五/六三个附加章节（跟踪池 / 主线 / regime），用分隔线与主报告衔接"""
+    """渲染四~七四个附加章节（跟踪池 / 主线 / regime / 资金面参考），用分隔线与主报告衔接"""
     parts = [
         format_tracking_section(trade_date),
         format_mainline_section(trade_date),
         format_regime_section(trade_date),
+        format_margin_section(trade_date),
     ]
     blocks: List[str] = []
     for part in parts:

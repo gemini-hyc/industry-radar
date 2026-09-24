@@ -248,15 +248,23 @@ if __name__ == "__main__":
     # 放在完备性检查之后：只有数据通过检查才登记信号，避免坏数据污染台账
     try:
         from src.signals import ledger as _ledger
-        from src.signals.sources import snapshot_signals
+        from src.signals.sources import cold_zone_history, snapshot_signals
 
         snapshots = snapshot_signals(trade_date)
+        cold = []
+        try:  # 当日冷区信号（旗舰信号逐日入账，不依赖手工回填）
+            cold = cold_zone_history(start=trade_date, end=trade_date, with_crowding=False)
+        except Exception as e:
+            print(f"⚠️ 冷区信号入账失败（不影响其他来源）: {e}")
+
+        rows = list(snapshots) + list(cold)
         led = _ledger.load_ledger()
         before = len(led)
-        led = _ledger.upsert(led, snapshots)
+        led = _ledger.upsert(led, rows)
         led = _ledger.backfill_forward_returns(led)
         path = _ledger.save_ledger(led)
-        print(f"\n[信号台账] {trade_date} 快照 {len(snapshots)} 条；"
+        print(f"\n[信号台账] {trade_date} 入账 {len(rows)} 条"
+              f"（快照 {len(snapshots)} + 冷区 {len(cold)}）；"
               f"台账 {before} → {len(led)} 条 → {path}")
     except Exception as e:
         print(f"⚠️ 信号台账更新失败（不影响主报告）: {e}")

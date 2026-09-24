@@ -104,10 +104,21 @@ def _parse_group_list(raw) -> List[str]:
 
 # ── 来源一：冷区宽度反转（可历史回填）────────────────────
 
+def _margin_pct_or_none(margin_lookup, date, code):
+    """从 (date × ind_code) 分位矩阵取标量；缺失返回 None"""
+    if margin_lookup is None or code is None or len(margin_lookup) == 0:
+        return None
+    if date not in margin_lookup.index or code not in margin_lookup.columns:
+        return None
+    v = margin_lookup.at[date, code]
+    return None if v is None or pd.isna(v) else round(float(v), 4)
+
+
 def cold_zone_history(
     start: Optional[str] = None,
     end: Optional[str] = None,
     with_crowding: bool = True,
+    with_margin: bool = True,
     window_days: int = 60,
     progress_every: int = 250,
 ) -> List[Dict]:
@@ -117,6 +128,7 @@ def cold_zone_history(
     参数:
         start / end  日期区间（YYYY-MM-DD），None 表示不限
         with_crowding 是否附带行业拥挤度特征（首次运行需聚合 850 万行个股数据，较慢）
+        with_margin  是否附带"行业两融余额/流通市值"横截面分位（读 signals 缓存，很快）
         window_days  每个信号日传入的窗口长度（需 >= 20，默认 60 足够覆盖"前20日均宽"）
     """
     from src.daily_review.factor_width_reversal import detect_signals
@@ -136,6 +148,18 @@ def cold_zone_history(
             logger.info("拥挤度面板已加载: %s", crowd_panel.shape)
         except Exception as e:  # 非致命：拥挤度只是特征快照
             logger.warning("拥挤度面板加载失败（跳过该特征）: %s", e)
+
+    # 两融占比分位（行业融资余额/流通市值）—— 实证：2024-09 起 583 条冷区信号中，
+    # 低分位组 20 日超额 −1.67pp、高分位组 +1.50pp（docs/sentiment-data-evaluation.md）
+    margin_lookup = None
+    if with_margin:
+        try:
+            from src.signals.sentiment import percentile_lookup
+            margin_lookup = percentile_lookup()
+            logger.info("两融占比分位面板已加载: %s",
+                        None if margin_lookup is None else margin_lookup.shape)
+        except Exception as e:
+            logger.warning("两融占比面板加载失败（跳过该特征）: %s", e)
 
     # 按日期排序后，各交易日占连续行区间 —— 窗口切片 O(1)
     sizes = daily.groupby("date", sort=True).size()
@@ -196,6 +220,7 @@ def cold_zone_history(
                     "vol_ratio": s.get("vol_ratio"),
                     "breadth_trajectory": s.get("breadth_trajectory"),
                     "crowding": s.get("crowding"),
+                    "margin_pct": _margin_pct_or_none(margin_lookup, d, s.get("industry_code")),
                     "market_breadth": round(market_breadth, 4),
                 },
             ))

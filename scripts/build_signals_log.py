@@ -29,6 +29,7 @@ def main() -> int:
     ap.add_argument("--start", default=None, help="冷区回填起点 YYYY-MM-DD")
     ap.add_argument("--end", default=None, help="冷区回填终点 YYYY-MM-DD")
     ap.add_argument("--no-crowding", action="store_true", help="回填时不聚合拥挤度特征（更快）")
+    ap.add_argument("--no-margin", action="store_true", help="回填时不附带两融占比分位特征")
     ap.add_argument("--no-snapshot", action="store_true", help="跳过当日快照采集")
     ap.add_argument("--no-backfill-returns", action="store_true", help="跳过前向收益回填")
     ap.add_argument("--out", default=None, help="台账路径（默认 <数据根>/signals/signals_log.parquet）")
@@ -40,7 +41,8 @@ def main() -> int:
     if args.backfill_cold_zone:
         print(f"🔁 全历史回填冷区信号：{args.start or '最早'} → {args.end or '最新'} …")
         cz = cold_zone_history(start=args.start, end=args.end,
-                               with_crowding=not args.no_crowding)
+                               with_crowding=not args.no_crowding,
+                               with_margin=not args.no_margin)
         print(f"   冷区信号 {len(cz)} 条")
         rows += cz
 
