@@ -23,10 +23,12 @@ import numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.paths import INDUSTRY_DIR
+from src.paths import INDUSTRY_DIR, DATA_DIR
 
 DATA_PATH = INDUSTRY_DIR / 'industry_weighted_returns.parquet'
 OUT_PATH = INDUSTRY_DIR / 'daily_regime.parquet'
+# 批次2 情绪汇总表（两融/龙虎榜/大宗/北向），由 quant-data/scripts/build_sentiment_daily.py 产出
+SENTI_PATH = DATA_DIR / 'sentiment' / 'sentiment_daily.parquet'
 
 # ============================================================
 # 1. 加载数据
@@ -261,6 +263,70 @@ if _wake_detail_path.exists():
         print(f"  {regime}: n={len(sub)}, 超额={sub['excess'].mean():.2f}%, 胜率={(sub['excess']>0).mean():.0%}")
 else:
     print(f"\n⚠️ 唤醒回测明细不存在，跳过策略适配验证: {_wake_detail_path}")
+
+# ============================================================
+# 7.5 接入情绪数据（批次2 消费方）
+# ============================================================
+# 设计原则：**只并入列，不改分类逻辑**。
+#   regime 的判定阈值是长期校准出来的，贸然把情绪指标塞进判定式会让历史
+#   口径不可比。所以这一步先把情绪列 join 进 daily_regime.parquet，并输出
+#   「各行情类型下的情绪指标均值」——先证明它有区分度，再考虑是否进入判定。
+SENTI_COLS = ['margin_bal', 'margin_bal_chg_pct', 'margin_rz_buy_share', 'margin_leverage',
+              'lhb_stock_n', 'lhb_net', 'lhb_inst_net', 'lhb_hsgt_net',
+              'block_amt', 'block_disc',
+              'north_top10_amt', 'north_top10_net', 'south_hold_ratio', 'north_hold_ratio']
+
+if SENTI_PATH.exists():
+    senti = pd.read_parquet(SENTI_PATH)
+    senti['date'] = pd.to_datetime(senti['date'])
+    # 两融余额环比：权威值由 build_sentiment_daily.py 产出（已做跨缺口掩码），
+    # 这里只在列缺失时兜底，避免两处各算一遍导致口径不一致。
+    # ⚠️ 兜底分支必须显式 fill_method=None：pandas 默认 'pad' 会把缺值前向填充后
+    #    算出 0.0，让「无数据」伪装成「零变动」（2026-09-24 踩过）。
+    if 'margin_bal' in senti.columns and 'margin_bal_chg_pct' not in senti.columns:
+        print("⚠️ 情绪表缺 margin_bal_chg_pct 列，本地兜底计算（口径可能不一致，建议重跑 build_sentiment_daily.py）")
+        senti = senti.sort_values('date')
+        senti['margin_bal_chg_pct'] = senti['margin_bal'].pct_change(fill_method=None) * 100
+
+    have = [c for c in SENTI_COLS if c in senti.columns]
+    daily_df = daily_df.merge(senti[['date'] + have], on='date', how='left')
+    n_hit = int(daily_df[have[0]].notna().sum()) if have else 0
+    print("\n" + "="*80)
+    print(f"情绪数据接入：{SENTI_PATH}")
+    print(f"  并入 {len(have)} 列，命中 {n_hit}/{len(daily_df)} 天"
+          f"（缺失日=该情绪数据尚未回溯到）")
+    print(f"  列：{have}")
+
+    # 信号有效性验证：不同行情类型下情绪指标的均值是否有差异
+    if n_hit > 20:
+        print("\n各行情类型的情绪指标均值（先看区分度，再决定是否进判定式）:")
+        hdr = f"  {'行情类型':<12s} {'n':>4s}"
+        for c in ['margin_bal_chg_pct', 'margin_rz_buy_share', 'lhb_inst_net',
+                  'block_disc', 'north_top10_amt']:
+            if c in daily_df.columns:
+                hdr += f" {c[:16]:>18s}"
+        print(hdr)
+        print("  " + "-" * (len(hdr) - 2))
+        scales = {'margin_bal_chg_pct': 1, 'margin_rz_buy_share': 1,
+                  'lhb_inst_net': 1e8, 'block_disc': 1, 'north_top10_amt': 1e8}
+        for regime in ['全面上涨', '偏强结构性', '结构性', '边缘结构性',
+                       '轮动', '偏弱轮动', '混合', '全面下跌']:
+            sub = daily_df[daily_df['regime'] == regime]
+            if len(sub) == 0:
+                continue
+            # n 用「该类型下情绪数据非空的天数」，避免回溯未完成时把全量天数误读成样本量
+            n_senti = int(sub['margin_bal_chg_pct'].notna().sum()) \
+                if 'margin_bal_chg_pct' in sub.columns else 0
+            line = f"  {regime:<12s} {n_senti:>4d}"
+            for c in ['margin_bal_chg_pct', 'margin_rz_buy_share', 'lhb_inst_net',
+                      'block_disc', 'north_top10_amt']:
+                if c in sub.columns:
+                    v = sub[c].mean()
+                    line += f" {v/scales[c]:>18.2f}" if pd.notna(v) else f" {'-':>18s}"
+            print(line)
+else:
+    print(f"\n⚠️ 情绪汇总表不存在，跳过接入: {SENTI_PATH}"
+          f"\n   （跑 quant-data/scripts/build_sentiment_daily.py 生成）")
 
 # ============================================================
 # 8. 保存
