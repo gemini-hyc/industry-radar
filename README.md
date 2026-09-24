@@ -42,6 +42,7 @@ scripts/build_members_daily.py  ← 日更：按交易日历展开每日快照
         reports/daily-analysis/YYYY-MM-DD_industry_review.md
                      ▼
         signals/signals_log.parquet              信号台账（全系统信号统一留痕 + 前向收益回填）
+        ├─ signals/industry_margin_daily.parquet  行业两融占比面板（情绪数据聚合，带增量缓存）
         └─ scripts/evaluate_signals.py           事件研究评估（按档位/年份/regime 的超额与胜率）
         scripts/sync_industries_to_futu.py       行业分组同步富途（手动触发）
 ```
@@ -51,7 +52,7 @@ scripts/build_members_daily.py  ← 日更：按交易日历展开每日快照
 - **单一配置源**：`config/config.yaml`，可用环境变量 `INDUSTRY_RADAR_DATA` 覆盖数据根目录，默认 `/Users/hyc/quant-data`
 - 数据读写全部经 `src/paths.py`，**禁止**硬编码 `/opt/data` 容器路径
 - 输入：`market/daily/*.parquet`、`daily_basic/*.parquet`（由现有 openclaw tushare-daily-fetch 任务每日 16:16 更新，本项目不重复拉取）
-- 输出：`industry/*.parquet`、`factors/ind_crowd_turnover_daily.parquet`、`industry/tracker_state.json`、`reports/daily-analysis/*.md`、`signals/signals_log.parquet`（信号台账）、`signals/eval_*.md`（评估报告）
+- 输出：`industry/*.parquet`、`factors/ind_crowd_turnover_daily.parquet`、`industry/tracker_state.json`、`reports/daily-analysis/*.md`、`signals/signals_log.parquet`（信号台账）、`signals/eval_*.md`（评估报告）、`signals/industry_margin_daily.parquet`（两融占比面板缓存）
 
 ## 用法
 
