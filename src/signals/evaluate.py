@@ -22,12 +22,18 @@ import pandas as pd
 
 from src.paths import INDUSTRY_DIR, SIGNALS_DIR
 from src.signals import ledger as L
-from src.signals.sources import SOURCE_SPECS
+from src.signals.sources import SOURCE_SPECS, STATUS_LABEL, STATUS_ORDER
 
 logger = logging.getLogger(__name__)
 
 REGIME_PATH = INDUSTRY_DIR / "daily_regime.parquet"
 MIN_BUCKET_N = 5  # 少于该样本数的分组不展示（避免小样本噪声结论）
+
+# 观察项的统一定位声明 —— 出现在每个观察项来源的详解之前
+OBSERVATIONAL_BANNER = (
+    "> ⛔ **本来源已被降级为「观察项」（2026-10-01）**："
+    "下表仅用于**持续观测样本积累**，**不作为交易依据，也不得据此调参**。"
+)
 
 
 def summarize(values: pd.Series) -> Dict:
@@ -190,6 +196,22 @@ def render_markdown(
     if obs_type:
         df = df[df["obs_type"] == obs_type]
 
+    # ── 信号定位（先讲清哪些是信号、哪些只是观察项，再看数字）──
+    lines += ["## 信号定位", "",
+              "> 定位决定数字该怎么用：`生效` 可作依据；`观察项` 只积累样本；`待观察` 样本不足。", ""]
+    pos_rows = []
+    for src in sorted(df["source"].unique(),
+                      key=lambda s: (STATUS_ORDER.get(
+                          SOURCE_SPECS.get(s, {}).get("status", "pending"), 9), str(s))):
+        spec = SOURCE_SPECS.get(src, {})
+        status = spec.get("status", "pending")
+        pos_rows.append({
+            "来源": f"{src}（{spec.get('label', '')}）",
+            "定位": STATUS_LABEL.get(status, status),
+            "一句话": spec.get("status_short", "—"),
+        })
+    lines += [_md_table(pd.DataFrame(pos_rows)), ""]
+
     # ── 概览 ──
     lines += ["## 台账概览", ""]
     rows = []
@@ -209,7 +231,16 @@ def render_markdown(
     # ── 各来源详解 ──
     for src, g in df.groupby("source"):
         spec = SOURCE_SPECS.get(src, {})
+        status = spec.get("status", "pending")
         lines += [f"## 来源：{src} · {spec.get('label', '')}", ""]
+        if status == "observational":
+            lines += [OBSERVATIONAL_BANNER]
+            if spec.get("status_note"):
+                lines += [f"> 依据：{spec['status_note']}"]
+            lines += ["> 定位变更与回滚方式见 `docs/changes-2026-10-01-cold-zone-downgrade.md`。"]
+        elif spec.get("status_note"):
+            lines += [f"> 定位：**{STATUS_LABEL.get(status, status)}**　{spec['status_note']}"]
+        lines += [""]
         if spec.get("score_hint"):
             lines += [f"> 强度口径：{spec['score_hint']}", ""]
 

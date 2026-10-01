@@ -36,22 +36,51 @@ CROWD_PATH = FACTOR_DIR / "ind_crowd_turnover_daily.parquet"
 TRACKER_REPORT_PATH = INDUSTRY_DIR / "tracker_report.csv"
 MAINLINE_PATH = INDUSTRY_DIR / "mainline_detection.csv"
 
+# 信号定位（status）：决定一个来源在评估报告里的"身份"
+#   active        已被证据支持，可作为交易/决策依据
+#   observational 观察项 —— 保留入账与展示以积累样本，但**不作为交易依据，也不得据此调参**
+#   pending       样本不足以评估（向前积累中），结论未定
+STATUS_LABEL: Dict[str, str] = {
+    "active": "✅ 生效",
+    "observational": "⛔ 观察项",
+    "pending": "⏳ 待观察",
+}
+STATUS_ORDER: Dict[str, int] = {"active": 0, "pending": 1, "observational": 2}
+ALL_STATUSES = tuple(STATUS_ORDER)
+
+# 冷区信号降级日期（写进报告，便于追溯口径变更时点）
+COLD_ZONE_DOWNGRADED_ON = "2026-10-01"
+
 # 各来源的强度口径与方向（评估时据此决定排序/分档方向）
 SOURCE_SPECS: Dict[str, Dict] = {
     "cold_zone": {
         "label": "冷区宽度反转",
         "score_hint": "前20日均宽（%），越小越强",
         "direction": "asc",
+        # 定位变更（2026-10-01）：见 docs/changes-2026-10-01-cold-zone-downgrade.md
+        "status": "observational",
+        "status_short": "样本外证据不足，**不作交易依据**（保留展示以积累样本）",
+        "status_note": (
+            "17 个候选过滤器 × IS/OOS 切分实测：样本内 17/17 全为正，但 IS↔OOS 相关仅 +0.18，"
+            "16/17 候选在样本外衰减（多个由正转负）→ 调参过程本身失效。"
+            "保留入账与展示以持续积累样本，但不作为交易依据。"
+        ),
     },
     "tracker_pool": {
         "label": "贝叶斯反转跟踪池（入场事件）",
         "score_hint": "Sₜ，越大越强",
         "direction": "desc",
+        "status": "pending",
+        "status_short": "仅向前样本，规模不足以评估",
+        "status_note": "有状态引擎，历史无法无损重建；只有向前样本，尚未积累到可评估规模。",
     },
     "mainline": {
         "label": "主线方向成员行业（每日状态）",
         "score_hint": "heat_ratio 热度，越大越强",
         "direction": "desc",
+        "status": "pending",
+        "status_short": "仅向前样本，规模不足以评估",
+        "status_note": "每日状态快照，只有向前样本，尚未积累到可评估规模。",
     },
 }
 

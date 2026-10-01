@@ -363,6 +363,15 @@ TIER_LABELS = {
 
 TIER_ORDER = {"high": 0, "standard": 1, "watch": 2}
 
+# 定位声明（2026-10-01）：冷区信号已降级为「观察项」，不再作为交易依据。
+# 这是**标注**变更，不涉及触发条件、分级或任何数值口径。
+# 详见 docs/changes-2026-10-01-cold-zone-downgrade.md
+COLD_ZONE_STATUS_NOTE = (
+    "> ⛔ **定位：观察项**（2026-10-01 起降级）—— 可用于描述「哪些冷门行业开始转暖」，"
+    "但**不作为交易依据**：17 个候选过滤器在样本外全部衰减（IS↔OOS 相关仅 +0.18），"
+    "历史上 20 日超额 +0.29pp，扣掉双边成本后基本不可交易。保留展示以持续积累样本。"
+)
+
 
 def format_cold_zone_section(signals: List[Dict]) -> str:
     """
@@ -380,10 +389,12 @@ def format_cold_zone_section(signals: List[Dict]) -> str:
         lines.append("今日无冷区宽度反转信号。")
         lines.append("")
         lines.append("> 触发条件：前20日均宽 ≤ 冷区阈值（随全市场宽度动态调制），宽度连续扩张恰好第 3 天触发一次")
+        lines.append(COLD_ZONE_STATUS_NOTE)
         return "\n".join(lines)
 
     lines.append("> 触发条件：前20日均宽 ≤ 冷区阈值（随全市场宽度动态调制），宽度连续扩张恰好第 3 天触发一次")
     lines.append(f"> 今日共 {len(signals)} 条信号（按冷度排序）")
+    lines.append(COLD_ZONE_STATUS_NOTE)
     lines.append("")
 
     # ── 信号列表 ──
@@ -445,6 +456,7 @@ def format_cold_zone_section(signals: List[Dict]) -> str:
 
     lines.append("> 分级依据：前20日均宽 <10% 高置信 / <20% 标准 / <冷区阈值 观察")
     lines.append("> D1占比和量比为附属参考信息，不参与信号分级。")
+    lines.append("> 注：此处「观察」指**分级档位**；与本节开头的「观察项」（信号定位）不是一回事。")
 
     return "\n".join(lines)
 
