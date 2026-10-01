@@ -3,6 +3,10 @@
 计算行业市值加权涨跌幅，产出 data/industry/industry_weighted_returns.parquet
 
 公式: weighted_pct = Σ(pctChg × circ_mv) / Σ(circ_mv)
+
+异常样本剔除（2026-10-01）：
+  当日无涨跌幅限制的观测（新股/复牌/退市整理）不计入聚合，否则会在行业内
+  制造虚假波动（实测最大修正 77.97pp）。判据见 src/utils/data_quality.py。
 """
 import sys
 import pandas as pd
@@ -12,7 +16,8 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.paths import MARKET_DIR, BASIC_DIR, INDUSTRY_DIR
+from src.paths import MARKET_DIR, BASIC_DIR, INDUSTRY_DIR, STK_LIMIT_DIR
+from src.utils.data_quality import load_list_dates, load_no_limit_flags, mark_abnormal
 
 OUT_PATH = INDUSTRY_DIR / "industry_weighted_returns.parquet"
 
@@ -45,10 +50,19 @@ def main(days: int = 250):
         print("错误: 无行情数据")
         sys.exit(1)
 
+    # ── 2b. 异常样本判据（新股无涨跌幅限制日 / 次新 / 价格失真）──
+    list_dates = load_list_dates()
+    print(f"上市日期字典: {len(list_dates)} 只（stock_basic，可能滞后于行情）")
+    if not Path(STK_LIMIT_DIR).exists():
+        print(f"⚠️ 无 stk_limit 目录（{STK_LIMIT_DIR}）→ 判据「无涨跌幅限制日」不可用，"
+              f"仅靠 次新/价格失真 兜底")
+
     market_parts = []
     skipped = []
+    n_raw = n_dropped = n_nolimit_days = 0
     for f in market_files:
-        df = pd.read_parquet(f, columns=["date", "code", "pctChg", "amount", "volume"])
+        df = pd.read_parquet(f, columns=["date", "code", "pctChg", "amount", "volume",
+                                         "preclose"])
         d = pd.to_datetime(df["date"].iloc[0]).normalize()
         day_map = mem_by_date.get(d)
         if day_map is None:
@@ -61,6 +75,15 @@ def main(days: int = 250):
             # ② 修复: 剔除 pctChg 缺失(停牌/新股首日无涨跌幅)，避免当 0% 污染加权值
             df = df.dropna(subset=["pctChg"])
             if not df.empty:
+                # ③ 修复(2026-10-01): 剔除「当日无涨跌幅限制」的观测，
+                #    否则新股首日 +1900% / 复牌 +488% 这类极值会污染行业聚合
+                nolim = load_no_limit_flags([d])
+                n_nolimit_days += len(nolim)
+                mask, _ = mark_abnormal(df, no_limit=nolim, list_dates=list_dates)
+                n_raw += len(df)
+                n_dropped += int(mask.sum())
+                df = df[~mask]
+            if not df.empty:
                 market_parts.append(df)
 
     if not market_parts:
@@ -69,6 +92,8 @@ def main(days: int = 250):
 
     market = pd.concat(market_parts, ignore_index=True)
     print(f"行情: {len(market)} 条 ({market['date'].nunique()} 个交易日)")
+    print(f"异常样本: 剔除 {n_dropped} / {n_raw} 条（{n_dropped/max(n_raw,1)*100:.3f}%）"
+          f"；其中 stk_limit 标记的无涨跌幅限制日 {n_nolimit_days} 个「日×股」")
 
     # 防静默缺数：行情已落地、但成分快照缺失的交易日会被整日跳过（不报错）
     # 新交易日必须先重建每日成分快照，否则该日永久缺失（窗口向前滚动后会掉出回溯范围）

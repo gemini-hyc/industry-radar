@@ -46,6 +46,8 @@
   `industry_members.parquet` 仅作行业全集/名称字典。
 - 加权：`circ_mv` 流通市值加权（对标通达信 881xxx / 申万官方，平均绝对误差 ~0.10pp）。
 - 宽度：`(close > MA20).mean()`（`research/ic_analysis_5factors.py` 里那套 `pctChg > 0` 是**另一套口径**，勿混）。
+  **2026-10-01 起**：MA 未成型的个股（`ma20` 为 NaN）**不进分母**（`above.where(ma20.notna())`）；
+  且**当日无涨跌幅限制**的观测不计入聚合（见 `src/utils/data_quality.py`）。
 - 冷区信号生产规则：前 20 日均宽 ≤ 动态阈值 + 宽度连续扩张**恰好第 3 天**才触发（极度稀疏）。
   注：报告文案写的是"连续扩张 ≥ 3 天"（`module_02_industry.py:382/385`），**与代码不符**。
 - **regime 口径**（2026-10-01 起）：`rank_consistency` 锚点已修正为 0 = 随机排名水平，
@@ -83,10 +85,36 @@
    且 `top5_conc` 与 `up_pct` 共线 → **regime 只作【市场状态描述】用，不得作交易信号**。
    详见 `docs/changes-2026-10-01-p2-regime.md`。
 
-### 待修（P2/P3）
-6. **新股/退市首日极值未缩尾**：`compute_weighted_returns.py:62` 只 `dropna` 不 `clip`，
-   实测 +206.59% 已进入聚合；新上市 <5 日个股 `ma20` 为 NaN 仍计入宽度分母（系统性压低 breadth）。
+### 已修（P2-2/P2-3，2026-10-01）
+6. ✅ **新股/复牌/退市首日极值 + 宽度分母** —— 新增共享判据模块 **`src/utils/data_quality.py`**：
+   以 `stk_limit` 的**占位值**（`up_limit>1e5` / `down_limit<0.02` = 当日无涨跌幅限制）为主判据，
+   辅以「上市不足 10 自然日」与「preclose 失真」，命中且 `|pctChg|>11%` 才剔除；
+   在 **4 个生产调用点**统一生效（`compute_weighted_returns` / `build_industry_daily_full` /
+   `industry_tracker` / `module_02_industry`，均经 `compute_concept_daily(drop_abnormal=True)`）。
+   ⚠️ **关键教训**：全市场 `|pctChg|>11%` 的 58,498 条里 **95.7% 是创业板/科创板正常 20cm 涨跌停**，
+   **不该动**；`stock_basic.parquet` 滞后（缺 2026 年新股），**不能只靠 `list_date`**。
+   宽度分母修正：`above = (close>ma20).where(ma20.notna())` —— 原实现下 `close>NaN→False`
+   使次新股被当作「未站上均线」计入分母，系统性压低 breadth（预热期 524 个行业-天被误判为冷区）。
+   实测影响：450 天窗口 368 个行业-天受影响，加权最大修正 **77.97pp**、等权 **66.40pp**；
+   breadth 系统性 +0.19pp。详见 `docs/changes-2026-10-01-p2-extremes-width.md`。
+
+### 待修（P3 + 本轮新发现）
 7. **文案与代码不符**：`module_02_industry.py:382` 写"连续扩张 ≥ 3 天"，代码是"恰好第 3 天"。
 8. **mainline 缺约束**：无最小成员数/跨期稳定性（当前主线 = 单行业「航海装备Ⅱ」）；
    另有死函数引用未定义变量、热度分母用全样本均值（前视）。
 9. **三区只实现 1/3**：中区/热区仍是硬编码占位（`module_02_industry.py:594-604`）。
+10. 🔴 **成分表口径不一致（本轮新发现，未动）**：`compute_weighted_returns.py` 用 **PIT** 成分
+    （`industry_members_daily`），而 `build_industry_daily_full.py:29` 用**静态快照**
+    （`load_industry_members()` → `industry_members.parquet`）→ **`daily_full` 全程有前视偏差**，
+    两份产物口径不同却喂给同一批下游。
+11. 🔴 **历史窗口断层（本轮新发现，未动）**：`build_members_daily.py:16` 硬编码 `BASE=2024-09-24`
+    → 成分快照仅 **490 天**，但 `weighted_returns` / `daily_full` 有 **1636 天**；
+    2024-09-24 之前的 **1146 天不可能由当前脚本生成**（来自更早的另一套口径）。
+    upsert「保留窗口外历史」把**新旧口径拼在同一份文件里**。
+
+### 待决策项
+- 成分口径与历史窗口断层（上面 10、11）→ 可选：把 `index_member_all_raw.parquet` 的
+  `in_date/out_date` 回溯到 2020 重建 PIT 成分（该表具备条件），或明确截断到 2024-09-24。
+- 宽度的 `min_periods` 是否由 5 提到 20（定义变更，实测影响很小）。
+- regime 是否简化 4~5 类，或引入新的独立结构判据。
+- 完整待办清单见 `docs/action-items.md`。

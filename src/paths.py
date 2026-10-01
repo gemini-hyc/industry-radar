@@ -60,6 +60,7 @@ SIGNALS_DIR = DATA_DIR / "signals"                  # 信号台账与评估（�
 SIGNALS_LOG_PATH = SIGNALS_DIR / "signals_log.parquet"  # 全系统信号台账
 REPORTS_DIR = DATA_DIR / "reports" / "daily-analysis"  # 日报输出
 STOCK_BASIC_PATH = DATA_DIR / "stock_basic.parquet"  # 股票列表
+STK_LIMIT_DIR = DATA_DIR / "stk_limit"              # 每日涨跌停价（用于识别「无涨跌幅限制日」）
 
 # ── 富途 OpenD 连接 ──
 FUTU_HOST, FUTU_PORT = resolve_futu()

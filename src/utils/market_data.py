@@ -19,6 +19,24 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.paths import DATA_DIR, MARKET_DIR, INDUSTRY_DIR
+from src.utils.data_quality import load_list_dates, load_no_limit_flags, mark_abnormal
+
+
+# ── 异常样本剔除（2026-10-01）──────────────────
+# 行业聚合不应包含「当日无涨跌幅限制」的观测（新股/复牌/退市整理）。
+# 判据与实测影响见 src/utils/data_quality.py 的模块 docstring。
+
+def drop_abnormal_samples(market_df: pd.DataFrame):
+    """剔除不应进入行业聚合的异常观测。返回 (清洗后 df, 统计)。"""
+    if market_df.empty or "pctChg" not in market_df.columns:
+        return market_df, {"total": 0, "marked": 0}
+
+    dates = pd.to_datetime(market_df["date"]).dt.normalize().unique()
+    nolim = load_no_limit_flags(dates)
+    mask, stats = mark_abnormal(market_df, no_limit=nolim, list_dates=load_list_dates())
+    if stats.get("marked", 0) == 0:
+        return market_df, stats
+    return market_df[~mask].copy(), stats
 
 
 # ── 行情加载 ──────────────────────────────────
@@ -47,15 +65,36 @@ def load_recent_market(days: int = 250, end_date: str = None) -> pd.DataFrame:
 # ── 概念/行业日频聚合 ─────────────────────────
 
 def compute_concept_daily(market_df: pd.DataFrame,
-                          concept_members: dict) -> pd.DataFrame:
+                          concept_members: dict,
+                          drop_abnormal: bool = True,
+                          breadth_dropna: bool = True) -> pd.DataFrame:
     """
     为每个概念/行业计算每日聚合指标。
     返回 DataFrame: date, con_code, con_name, avg_pct, breadth(MA20基准),
                      breadth_ma13(MA13基准,预警期用), total_amount, stock_n,
                      avg_open(等权均开盘价), avg_close(等权均收盘价)
+
+    参数:
+      drop_abnormal : 剔除「当日无涨跌幅限制」的观测（新股/复牌/退市整理）。
+                      2026-10-01 起默认开启 —— 见 src/utils/data_quality.py。
+      breadth_dropna: 宽度分母只计「MA 已成型」的个股。原实现里
+                      `close > ma20` 在 ma20 为 NaN 时得 False，使新上市
+                      (<5 日) 个股被当作「未站上均线」计入分母，系统性压低 breadth。
     """
     if market_df.empty or not concept_members:
         return pd.DataFrame()
+
+    # n_stocks 用**剔除前**的成员表统计，保持「行业成员总数」语义不变
+    n_stocks_map = {}
+    if drop_abnormal:
+        for con_code, codes in concept_members.items():
+            n_stocks_map[con_code] = market_df.loc[
+                market_df["code"].isin(codes), "code"].nunique()
+
+    if drop_abnormal:
+        market_df, _stats = drop_abnormal_samples(market_df)
+        if market_df.empty:
+            return pd.DataFrame()
 
     records = []
 
@@ -64,7 +103,7 @@ def compute_concept_daily(market_df: pd.DataFrame,
         if con_market.empty:
             continue
 
-        n_stocks = con_market["code"].nunique()
+        n_stocks = n_stocks_map.get(con_code, con_market["code"].nunique())
 
         # ── 按日期聚合：基础指标 ──
         daily = con_market.groupby("date").agg(
@@ -78,7 +117,11 @@ def compute_concept_daily(market_df: pd.DataFrame,
         con_market["ma20"] = con_market.groupby("code")["close"].transform(
             lambda x: x.rolling(20, min_periods=5).mean()
         )
-        con_market["above_ma20"] = (con_market["close"] > con_market["ma20"]).astype(int)
+        above20 = con_market["close"] > con_market["ma20"]
+        # breadth_dropna: ma20 未成型(NaN)的个股不参与分母。
+        # 原实现下 `close > NaN` → False → 被当作「未站上均线」计入分母，系统性压低 breadth。
+        con_market["above_ma20"] = (above20.where(con_market["ma20"].notna())
+                                    if breadth_dropna else above20.astype(int))
         breadth_daily = con_market.groupby("date")["above_ma20"].mean().reset_index()
         breadth_daily.columns = ["date", "breadth"]
         daily = daily.merge(breadth_daily, on="date", how="left")
@@ -87,7 +130,9 @@ def compute_concept_daily(market_df: pd.DataFrame,
         con_market["ma13"] = con_market.groupby("code")["close"].transform(
             lambda x: x.rolling(13, min_periods=5).mean()
         )
-        con_market["above_ma13"] = (con_market["close"] > con_market["ma13"]).astype(int)
+        above13 = con_market["close"] > con_market["ma13"]
+        con_market["above_ma13"] = (above13.where(con_market["ma13"].notna())
+                                    if breadth_dropna else above13.astype(int))
         breadth13_daily = con_market.groupby("date")["above_ma13"].mean().reset_index()
         breadth13_daily.columns = ["date", "breadth_ma13"]
         daily = daily.merge(breadth13_daily, on="date", how="left")
