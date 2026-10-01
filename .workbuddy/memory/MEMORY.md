@@ -49,19 +49,33 @@
 - 冷区信号生产规则：前 20 日均宽 ≤ 动态阈值 + 宽度连续扩张**恰好第 3 天**才触发（极度稀疏）。
   注：报告文案写的是"连续扩张 ≥ 3 天"（`module_02_industry.py:382/385`），**与代码不符**。
 
-## 基础设施缺口（2026-10-01 查明，影响所有改动）
+## 基础设施现状（2026-10-01）
 
-- **本项目无版本控制**：`/Users/hyc/Quant/industry-radar` 及上级目录都不是 git 仓库 → 改动无法回滚。
-- **代码无同步通道**：`~/.quant-sync`（pull.sh / RUNBOOK）只同步 `quant-data` **数据**，不含代码。
-  在本机改的代码目前没有机制到 Mac Studio。仓库内文件 mtime 统一为 2026-09-24，
-  源端实际在跑的版本**待核对**。
+- **版本控制已建立**：`git init` + 首次提交 `d59518d`（81 文件，含 `.workbuddy/memory`）；
+  仓库级身份 `黄宇澄 <hyc@huangyudengdeMacBook-Air.local>`。改动前先确认工作区干净。
+- **代码仍无自动同步通道**：`~/.quant-sync`（pull.sh / RUNBOOK）只同步 `quant-data` **数据**，不含代码。
+  改动到 Mac Studio 靠手工（rsync / git / 拷贝），操作通知见 `docs/changes-2026-10-01-p0p1.md`。
+- **本机 `/usr/bin/python3` 没有 pandas**（只有 `stock-doctor/.venv` 有）→ 本机跑不动链路。
+  做验证用 `/Users/hyc/Quant/stock-doctor/.venv/bin/python`，并先把 `INDUSTRY_RADAR_DATA` 指向沙箱。
+- ⚠️ `cron` 的子进程 env 曾丢 `INDUSTRY_RADAR_DATA`（**已修**）。未修时自定义数据根下会检查/写入
+  错误数据集 —— 沙箱测试因此误写过一次真实数据根的 `completeness_status.json`。
 
-## 已确证的高优先级缺陷（细节见 memory/2026-10-01.md）
+## 缺陷台账（2026-10-01）
 
-1. **台账自 2026-09-24 停更**：根因 `cron/industry_review_daily.py:239-241` 完备性检查
-   `rc==1` 时 `sys.exit(1)`，位于台账入账（`:247-271`）**之前** —— 情绪数据缺口连带阻断了台账更新。
-2. **regime 三个"结构性"类是死类**：`rank_consistency` 随机基线在 **−0.25** 却按 0 中心设阈值
-   （`regime_classifier.py:106/113` 与 `:147/151/163`）→ 全历史 `rc≥0.3` 零次。
-3. **新股/退市首日极值未缩尾**：`compute_weighted_returns.py:62` 只 `dropna` 不 `clip`，
-   实测 +206.59% 已进入行业聚合；新上市 <5 日个股 `ma20` 为 NaN 仍计入宽度分母（系统性压低 breadth）。
-4. **可静默截断历史**：`build_industry_daily_full.py:50-65` 的 try/except 吞异常后仍整文件覆盖。
+### 已修（P1，commit d59518d）
+1. ✅ **台账停更** —— 入账移出 `sys.exit(1)` 短路，新增 `_blocks_ledger`（`SENTI_*` 类 CRITICAL 不阻断
+   台账），退出码重定义为 0 健康 / 1 关键数据缺失且台账阻断 / 2 报告与台账已生成。
+2. ✅ **两处静默截断历史的写入点** —— `build_industry_daily_full.py` / `compute_weighted_returns.py`
+   改为拒绝写入 + 行数护栏（+ `--force-overwrite` 逃生门）。
+3. ✅ `src/signals/evaluate.py`「平均收益(%)」列未格式化。
+4. ✅ `build_signals_log.py` 默认快照日 `now()` → 最近交易日。
+
+### 待修（P2/P3）
+5. **regime 三个"结构性"类是死类**：`rank_consistency` 随机基线在 **−0.25** 却按 0 中心设阈值
+   （`regime_classifier.py:106/113` 与 `:147/151/163`）→ 1636 天全历史 `rc≥0.3` 零次。
+6. **新股/退市首日极值未缩尾**：`compute_weighted_returns.py:62` 只 `dropna` 不 `clip`，
+   实测 +206.59% 已进入聚合；新上市 <5 日个股 `ma20` 为 NaN 仍计入宽度分母（系统性压低 breadth）。
+7. **文案与代码不符**：`module_02_industry.py:382` 写"连续扩张 ≥ 3 天"，代码是"恰好第 3 天"。
+8. **mainline 缺约束**：无最小成员数/跨期稳定性（当前主线 = 单行业「航海装备Ⅱ」）；
+   另有死函数引用未定义变量、热度分母用全样本均值（前视）。
+9. **三区只实现 1/3**：中区/热区仍是硬编码占位（`module_02_industry.py:594-604`）。
