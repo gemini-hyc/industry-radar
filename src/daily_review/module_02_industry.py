@@ -379,10 +379,10 @@ def format_cold_zone_section(signals: List[Dict]) -> str:
     if not signals:
         lines.append("今日无冷区宽度反转信号。")
         lines.append("")
-        lines.append("> 触发条件：前20日均宽 ≤ 冷区阈值，连续扩张 ≥ 3天")
+        lines.append("> 触发条件：前20日均宽 ≤ 冷区阈值（随全市场宽度动态调制），宽度连续扩张恰好第 3 天触发一次")
         return "\n".join(lines)
 
-    lines.append("> 触发条件：前20日均宽 ≤ 冷区阈值，连续扩张 ≥ 3天")
+    lines.append("> 触发条件：前20日均宽 ≤ 冷区阈值（随全市场宽度动态调制），宽度连续扩张恰好第 3 天触发一次")
     lines.append(f"> 今日共 {len(signals)} 条信号（按冷度排序）")
     lines.append("")
 
