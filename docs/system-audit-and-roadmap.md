@@ -204,7 +204,7 @@
 
 | 旧问题 | 现状 |
 |---|---|
-| 成分前视偏差（历史回测用当前成分） | 已用 `industry_members_daily.parquet`（Tushare `index_member_all`，带 `in_date/out_date`）按当日真实成分聚合 |
+| 成分前视偏差（历史回测用当前成分） | **只解决了一半**：`industry_weighted_returns` 已用 `industry_members_daily.parquet`（带 `in_date/out_date`）按当日真实成分聚合；但 `industry_daily_full` 直到 **2026-10-01（P2-4）** 仍是静态快照 —— 见下方 P2-4 |
 | 加权口径（总市值） | 已改 `circ_mv` 流通市值加权，对标通达信官方点位平均绝对误差 ~0.10pp |
 | 静默缺数（文件有行但内容为空） | 已加 `scripts/check_data_completeness.py`（CRITICAL/WARNING 分级 + 退出码 + `industry/completeness_status.json`） |
 | 信号无留痕、无法验证 | 已建信号台账 `signals/signals_log.parquet` + 事件研究评估器 |
@@ -215,6 +215,15 @@
 修复方案：新增共享判据模块 `src/utils/data_quality.py`，以 `stk_limit` 的**占位值**（`up_limit>1e5 / down_limit<0.02` = 当日无涨跌幅限制）为主判据，辅以「上市不足 10 自然日」与「preclose 失真」，在 4 个生产调用点统一剔除。**注意：全市场 `|pctChg|>11%` 的 58,498 条里 95.7% 是创业板/科创板正常 20cm 涨跌停，不应误伤。**
 
 详见 `docs/changes-2026-10-01-p2-extremes-width.md`。
+
+**✅ 已修（2026-10-01，P2-4）**：`industry_daily_full` 的**前视偏差**与**历史断层**是一根链条的两端。
+
+- **前视偏差**：`build_industry_daily_full.py` 用静态快照（`industry_members`，= 2026-09 的当前成分）回填 2020 年行情。实测 2020-01-02 静态 **5644 只** vs 当日真实成分 **3817 只**，**混入 32% 当时尚未纳入该行业的个股**。因 `src/signals/sources.py` 显示冷区信号的唯一输入就是本产物，偏差直接注入旗舰信号 —— 同一 250 天窗口下，PIT 与静态产出 **340 vs 334 条**冷区信号、交集仅 320，**约 10% 不同**。
+- **历史断层**：`build_members_daily.py:16` 硬编码 `BASE=2024-09-24`，成分快照只 490 天，而聚合产物 1636 天。实测原料 `index_member_all_raw.parquet` 自带 `in_date/out_date`（最早 **1984-05-09**），`BASE` **只是日历过滤、并非数据限制**。
+
+修复：`compute_concept_daily` 新增 `members_daily` 参数原生支持 PIT（**MA 必须先于成分过滤计算**，否则个股序列被截断）；`build_industry_daily_full.py` 默认强制 PIT、缺失即拒绝执行；`BASE` 参数化为 `--base`（默认全历史）。重建后快照 **1636 天 / 8,417,497 行**，**490 天重叠期逐条完全一致**（零回归）。
+
+详见 `docs/changes-2026-10-01-p2-pit-members.md`。
 
 ---
 
@@ -369,6 +378,7 @@ python3 scripts/evaluate_signals.py --source cold_zone --horizons 5,10,20,60
 | ✅ **本会话实测**（可直接引用） | 台账 2234 条冷区信号的完整统计；regime 全历史分布与 `rank_consistency`；signal 稀疏度（09-22/23 零信号）；数据 schema 与零缺失；cron 幂等性；报告字节数；24 个常量；33 个 research 脚本 |
 | 📄 **文档记载**（我读到但**未复现**） | 旧回测数字（+2.02%/62%、+9.06%/84%、IR 1.15~2.43、热区 +3.01%/65%）、`wake_backtest_results.csv` 的 n=95 为文件首行所载 |
 | ✅ **已修** | 新股首日极值 → 已剔除「无涨跌幅限制日」的观测（P2-2，2026-10-01） |
-| 🔴 **新发现** | `build_industry_daily_full.py` 用**静态成分表**（`industry_members`）而非 PIT 快照 → **全程有前视偏差**，且与 `compute_weighted_returns.py` 口径不一致 |
-| 🔴 **新发现** | `build_members_daily.py:16` 硬编码 `BASE=2024-09-24` → 成分快照仅 490 天，而聚合产物有 1636 天；**2024-09-24 之前的 1146 天来自另一套口径**，upsert 把新旧口径拼在同一份文件里 |
+| ✅ **已修** | `daily_full` 前视偏差 → 改用 PIT 当日真实成分（P2-4，2026-10-01，`docs/changes-2026-10-01-p2-pit-members.md`） |
+| ✅ **已修** | `build_members_daily.py` 硬编码 `BASE=2024-09-24` → 参数化为 `--base`、默认全历史重建（P2-4，2026-10-01） |
+| ⚠️ **残留** | `industry_tracker.py:168` / `module_02_industry.py:197` 仍用静态成分（读 30~60 天近日窗口，影响远小于 `daily_full`）；`sources._load_crowding_panel` 同；静态表（富途 5644 只）与 PIT（申万 5913 只）的 269 只差异未对账 |
 | ⚠️ **未验证** | `rank_consistency` 的**无效性**（bug 已修、锚点已归零，但对未来预测力为零 —— P2-1 已确证）；中区/热区信号在当前数据上的真实表现 |

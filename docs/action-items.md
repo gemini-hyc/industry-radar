@@ -15,6 +15,7 @@
 | A1 | `[ ]` | 同步 **P1 的 5 个文件** + 跑台账回填 | `docs/changes-2026-10-01-p0p1.md` |
 | A2 | `[ ]` | 同步 **`scripts/regime_classifier.py`** + 全量重算 + 重跑评估 | `docs/changes-2026-10-01-p2-regime.md` |
 | A3 | `[x]` | **P2-2/P2-3 异常样本剔除 + 宽度分母修正**（2026-10-01 完成，待同步） | `docs/changes-2026-10-01-p2-extremes-width.md` |
+| A4 | `[ ]` | **P2-4 全历史 PIT 成分 + 消除前视偏差**（2026-10-01 完成，待同步；**会再次改变行业聚合与冷区信号**） | `docs/changes-2026-10-01-p2-pit-members.md` |
 
 **A1 具体命令**
 ```bash
@@ -42,9 +43,36 @@ python3 scripts/regime_classifier.py                      # regime 依赖加权�
 python3 scripts/evaluate_signals.py
 ```
 
-> ⚠️ **顺序要求**：A1 → A2 → A3。A2/A3 都会改动 `daily_regime` / 行业聚合，
-> 而 `evaluate_signals.py` 依赖这些 —— 顺序乱了会看到中间态数字。
-> **A3 改动了聚合口径，所以 A2 的 regime 应在 A3 之后重跑一次。**
+**A4 具体命令**（⚠️ 与 A3 共用同一份 `src/utils/market_data.py`，建议合并执行）
+```bash
+cd ~/Quant/industry-radar
+# 同步：scripts/build_members_daily.py、scripts/build_industry_daily_full.py、src/utils/market_data.py
+python3 scripts/build_members_daily.py                     # 全历史 PIT：预期 8,417,497 行 / 1636 天
+python3 scripts/compute_weighted_returns.py --days 2000    # 现在能真正覆盖全历史
+python3 scripts/build_industry_daily_full.py --force-overwrite
+python3 scripts/regime_classifier.py
+python3 scripts/build_nav_924.py
+# 台账冷区信号必须重算（口径已变，约 10% 的信号不同）
+cp <数据根>/signals/signals_log.parquet <数据根>/signals/signals_log.parquet.bak
+python3 -c "
+import pandas as pd
+from src.paths import SIGNALS_LOG_PATH
+df = pd.read_parquet(SIGNALS_LOG_PATH)
+n = int((df['source'] == 'cold_zone').sum())
+df[df['source'] != 'cold_zone'].to_parquet(SIGNALS_LOG_PATH, index=False)
+print(f'已剔除 {n} 条旧 cold_zone 记录')
+"
+python3 scripts/build_signals_log.py --backfill-cold-zone --no-snapshot
+python3 scripts/evaluate_signals.py
+```
+
+> ⚠️ **执行顺序（已修订）**：**A1 → A2 → A3 → A4**。
+> **A3 与 A4 应合并成一次同步执行** —— 两者改的是同一个文件 `src/utils/market_data.py`，
+> 分开同步会出现"文件版本不一致"的中间态。合并后的正确顺序：
+> ① 同步全部代码 → ② `build_members_daily.py` → ③ `compute_weighted_returns.py --days 2000`
+> → ④ `build_industry_daily_full.py --force-overwrite` → ⑤ `regime_classifier.py`
+> → ⑥ 重算冷区台账 → ⑦ `evaluate_signals.py`。
+> A2（regime）在 A3/A4 之后**再跑一次**（聚合口径变了）。
 
 ### B. 基础设施（一次性，优先级最高）
 
@@ -78,8 +106,10 @@ python3 scripts/evaluate_signals.py
 | D5 | ✅ | ~~新股/退市首日极值：缩尾 vs 延迟纳入~~ **已采用第三方案：剔除「无涨跌幅限制日」的观测**（2026-10-01）。理由：`stk_limit` 的占位值给出了精确判据，比缩尾更可解释、比延迟纳入覆盖面更全（同时覆盖复牌/退市整理）。 | P2-2 |
 | D6 | `[ ]` | **宽度的 `min_periods` 是否由 5 提到 20** | 现状：上市 5–20 个交易日的个股用「短窗口均值」充当 MA20，语义不严格。实测影响很小（最大 \|Δbreadth\| 0.107，232/15,720 个行业-天），但属**定义变更**。已修的只是「NaN 不进分母」（纯纠错）。 | P2-3 |
 | D7 | `[ ]` | **报告文案与代码不符**（"连续扩张 ≥3 天" vs "恰好第 3 天"） | 改文案 还是 改代码逻辑（已加进 `docs/action-items.md`） | 审计 P6 |
-| D8 | `[ ]` | **成分表口径不一致 → `daily_full` 全程有前视偏差**（🔴 本轮新发现） | `compute_weighted_returns.py` 用 **PIT** 成分（`industry_members_daily`），而 `build_industry_daily_full.py` 用**静态快照**（`industry_members`）→ 未来才纳入的股票被算进过去。两份产物口径不同却喂给同一批下游。 | 本轮发现 |
-| D9 | `[ ]` | **历史窗口断层：1146 天是另一套口径**（🔴 本轮新发现） | `build_members_daily.py:16` 硬编码 `BASE=2024-09-24`，成分快照仅 490 天，但 `weighted_returns`/`daily_full` 有 1636 天 → 2024-09-24 之前不可能由当前脚本生成。upsert「保留窗口外历史」把**新旧口径拼在同一份文件里**。可选：把 `in_date/out_date` 回溯到 2020 重建 PIT 成分（该表具备条件），或明确截断到 2024-09-24。 | 本轮发现 |
+| D8 | ✅ | ~~成分表口径不一致 → `daily_full` 全程有前视偏差~~ **已修（2026-10-01）**：`compute_concept_daily` 原生支持 PIT，`build_industry_daily_full.py` 默认强制使用当日真实成分、缺快照则拒绝执行。实测 `avg_pct` 最大修正 **5.78pp**、**39%** 的行业-天变化，**冷区信号约 10% 不同**。 | `docs/changes-2026-10-01-p2-pit-members.md` |
+| D9 | ✅ | ~~历史窗口断层：1146 天是另一套口径~~ **已修（2026-10-01）**：`BASE=2024-09-24` 参数化为 `--base`（默认全历史）。快照 **490 天 → 1636 天 / 8,417,497 行**，490 天重叠期**逐条完全一致**（零回归）。 | `docs/changes-2026-10-01-p2-pit-members.md` |
+| D10 | `[ ]` | **`industry_tracker.py` / `module_02_industry.py` 是否也切到 PIT**（🔴 P2-4 新发现） | 同一 `compute_concept_daily` 的另外两个调用点仍用静态成分。它们读近日窗口（30~60 天），影响远小于 `daily_full`；`module_02` 属报告主体、受「不改报告口径」铁律保护。 | P2-4 §7 |
+| D11 | `[ ]` | **静态表（富途 5644 只）与 PIT（申万 5913 只）的成分来源差异** | 差 269 只未做系统性对账。PIT 取自申万链路，更接近官方行业指数口径。 | P2-4 §7 |
 
 ---
 
@@ -90,3 +120,4 @@ python3 scripts/evaluate_signals.py
 | 2026-10-01 | P0 版本控制 + P1 止血（5 文件） | `d59518d` |
 | 2026-10-01 | P2-1 regime 口径修复（ddof 基准 + 阈值重校准） | `d3b024a` |
 | 2026-10-01 | P2-2/P2-3 异常样本剔除 + 宽度分母修正 | 见 `git log` |
+| 2026-10-01 | P2-4 全历史 PIT 成分 + 消除 `daily_full` 前视偏差 | 见 `git log` |
