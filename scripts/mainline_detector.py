@@ -235,16 +235,22 @@ def detect_mainline(group_signals, date,
     return pd.DataFrame(results).sort_values('heat_ratio', ascending=False)
 
 
-def find_ambush_candidates(group_signals, corr_matrix, name_map, 
+def find_ambush_candidates(returns, group_signals, corr_matrix, name_map,
                            mainline_gid, date,
                            corr_with_core=0.4, amt_below_mean=True):
     """
     找埋伏候选：与核心行业相关性高但成交额占比还在均值以下的行业
-    
+
+    ⚠️ 当前【未被 run_full_detection 调用】—— 本功能尚未接入日更链路，
+    其结果也不进 mainline_detection.csv。保留是因为它承载了"埋伏候选"的设计意图；
+    是否接入、按什么口径接入见 docs/action-items.md D2。
+
     参数：
+    - returns: 行业加权涨跌幅长表（含 date / ind_code / weighted_pct）。
+               修复前此处漏传该参数却直接引用，函数一旦被调用即 NameError。
     - mainline_gid: 主线方向群ID
     - corr_with_core: 与核心行业的最低相关系数
-    - amt_below_mean: 是否只选成交额占比<均值的行业
+    - amt_below_mean: 是否只选成交额占比<均值的行业（⚠️ 尚未实现，当前被忽略）
     """
     gs = group_signals[mainline_gid]
     core_codes = gs['codes']
@@ -264,21 +270,16 @@ def find_ambush_candidates(group_signals, corr_matrix, name_map,
             continue
         
         nc_name = name_map.get(nc, nc)
-        
-        # 该行业的成交额占比
-        idf_nc = group_signals  # 需要从数据中获取
-        # 简化：用returns中的超额
+
+        # 该行业的成交额占比：尚未实现（amt_below_mean 因此被忽略）；
+        # 当前只用"相对全市场等权的超额"
         nc_ret = returns[returns['ind_code'] == nc].groupby('date')['weighted_pct'].mean()
         market_ret = returns.groupby('date')['weighted_pct'].mean()
         nc_excess = nc_ret - market_ret
         
         # 20日超额
         nc_excess_ma20 = nc_excess.rolling(20, min_periods=10).mean()
-        
-        # 成交额占比
-        # 从idf中获取
-        # 简化处理
-        
+
         candidates.append({
             'code': nc,
             'name': nc_name,
@@ -301,10 +302,11 @@ def run_full_detection(reference_date=None):
     print("行业聚类...")
     groups, corr_matrix = cluster_industries(pivot, corr_threshold=0.6)
     
-    # 所有群都参与计算（不过滤大小）
+    # 所有群都参与计算：当前【无】最小成员数约束，也无跨期稳定性约束，
+    # 因此会出现"1 个行业的方向群被判定为主线"。是否加约束见 docs/action-items.md D2。
     valid_groups = groups
-    
-    print(f"聚类结果: {len(groups)}个群, 其中{len(valid_groups)}个有效(3-30行业)")
+
+    print(f"聚类结果: {len(groups)}个群，全部参与计算（当前无最小成员数约束）")
     for gid, codes in sorted(valid_groups.items(), key=lambda x: -len(x[1])):
         names = [name_map.get(c, c) for c in codes]
         print(f"  群{gid}({len(codes)}行业): {', '.join(names)}")

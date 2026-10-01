@@ -26,7 +26,7 @@ def _find_project_root() -> Path:
     if (candidate / "src" / "daily_review" / "module_02_industry.py").exists():
         return candidate
     # 回退到已知路径
-    for p in ["/Users/hyc/quant/industry-radar", "/Users/hyc/.hermes/quant"]:
+    for p in ["/Users/hyc/Quant/industry-radar", "/Users/hyc/.hermes/quant"]:
         pp = Path(p)
         if (pp / "src" / "daily_review" / "module_02_industry.py").exists():
             return pp

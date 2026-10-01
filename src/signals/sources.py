@@ -121,6 +121,8 @@ def cold_zone_history(
     with_margin: bool = True,
     window_days: int = 60,
     progress_every: int = 250,
+    expansion_rule: str = "exactly3",
+    cold_threshold_mode: str = "dynamic",
 ) -> List[Dict]:
     """
     对全历史重算冷区宽度反转信号，返回台账记录列表。
@@ -130,6 +132,10 @@ def cold_zone_history(
         with_crowding 是否附带行业拥挤度特征（首次运行需聚合 850 万行个股数据，较慢）
         with_margin  是否附带"行业两融余额/流通市值"横截面分位（读 signals 缓存，很快）
         window_days  每个信号日传入的窗口长度（需 >= 20，默认 60 足够覆盖"前20日均宽"）
+        expansion_rule / cold_threshold_mode
+                     透传给 detect_signals 的口径开关，**默认值即生产口径**。
+                     仅在做规则 A/B 复核时改（见 docs/action-items.md D7），
+                     改动后产出的信号与台账既有口径不可混用。
     """
     from src.daily_review.factor_width_reversal import detect_signals
 
@@ -202,6 +208,8 @@ def cold_zone_history(
             names,
             crowding_map,
             market_breadth=market_breadth,
+            expansion_rule=expansion_rule,
+            cold_threshold_mode=cold_threshold_mode,
         )
         for s in signals:
             rows.append(make_row(

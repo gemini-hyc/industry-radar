@@ -13,6 +13,9 @@ import pandas as pd
 from collections import defaultdict
 
 # ─── 配置 ───
+# ⚠️ 下列路径是历史**容器路径**（/opt/data/...），本机与源端均不存在，**直接运行会失败**。
+# research/ 目录已冻结不维护，保留原值仅作存档；如需重跑请改成本地数据根
+# （或参照 README 的 INDUSTRY_RADAR_DATA 用法，统一走 src/paths.py）。
 MARKET_DIR = '/opt/data/quant-data/market/daily/'
 IND_MEMBERS_PATH = '/opt/data/quant-data/industry/industry_members.parquet'
 IND_LIST_PATH = '/opt/data/quant-data/industry/industry_list.parquet'

@@ -33,6 +33,11 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# A/B 复核开关的合法取值（详见 detect_signals docstring）。
+# 默认值 = 当前生产口径；另一档是旧设计文档口径，仅供对比，不得作为默认。
+_EXPANSION_RULES = frozenset({"exactly3", "ge3"})
+_THRESHOLD_MODES = frozenset({"dynamic", "fixed30"})
+
 
 def detect_signals(
     trade_date: str,
@@ -41,6 +46,8 @@ def detect_signals(
     crowding_map: Optional[Dict[str, float]] = None,
     market_breadth: Optional[float] = None,
     min_history_days: int = 15,
+    expansion_rule: str = "exactly3",
+    cold_threshold_mode: str = "dynamic",
 ) -> List[Dict]:
     """
     检测冷区宽度反转信号。
@@ -52,6 +59,12 @@ def detect_signals(
         crowding_map: 行业代码→拥挤度映射 {ind_code: crowding_median}，可选
         market_breadth: 当日全市场宽度均值，用于动态调整冷区阈值，可选
         min_history_days: 前20日窗口最少需要的数据天数，默认15
+        expansion_rule: 扩张触发规则。**默认值即生产口径**，另一档仅供 A/B 复核：
+            - "exactly3"（默认）：恰好扩张第 3 天触发，避免同一扩张事件重复出信号
+            - "ge3"：扩张 ≥3 天即触发（旧设计文档 `docs/module_02_rebuild.md` §3.1 口径）
+        cold_threshold_mode: 冷区阈值模式。**默认值即生产口径**，另一档仅供 A/B 复核：
+            - "dynamic"（默认）：随全市场宽度调制（<0.35→0.35 / <0.55→0.30 / <0.70→0.25 / ≥0.70→0.20）
+            - "fixed30"：固定 30%（旧设计文档 `docs/module_02_rebuild.md` §3.1 口径）
 
     返回:
         List[SignalDict]，按分级 → 前宽深度排序。每个 SignalDict 包含：
@@ -59,6 +72,11 @@ def detect_signals(
             pre_breadth_20d, expansion_days, breadth_trajectory,
             d1, d2, d3, d1_ratio, vol_ratio, crowding
     """
+    if expansion_rule not in _EXPANSION_RULES:
+        raise ValueError(f"未知 expansion_rule={expansion_rule!r}，可选 {sorted(_EXPANSION_RULES)}")
+    if cold_threshold_mode not in _THRESHOLD_MODES:
+        raise ValueError(f"未知 cold_threshold_mode={cold_threshold_mode!r}，可选 {sorted(_THRESHOLD_MODES)}")
+
     if daily_data.empty:
         return []
 
@@ -93,8 +111,12 @@ def detect_signals(
             else:
                 break
 
-        # 只在扩张第3天触发一次，避免同一扩张事件的重复信号
-        if expansion_length != 3:
+        # 触发规则：exactly3 = 只在扩张第 3 天触发一次（生产口径，避免同一扩张事件重复外发）
+        #           ge3      = 扩张 ≥3 天即触发（旧文档口径，A/B 复核用）
+        if expansion_rule == "ge3":
+            if expansion_length < 3:
+                continue
+        elif expansion_length != 3:
             continue
 
         # 扩张起点索引
@@ -111,9 +133,12 @@ def detect_signals(
             continue
         pre_breadth = float(pre_breadth_series.mean())
 
-        # ── 市场阶段动态调制 ──
-        # 根据全市场宽度调整冷区阈值
-        if market_breadth is not None and not pd.isna(market_breadth):
+        # ── 冷区阈值 ──
+        # dynamic（生产口径）：随全市场宽度动态调制
+        # fixed30（旧文档口径，A/B 复核用）：固定 30%
+        if cold_threshold_mode == "fixed30":
+            cold_threshold = 0.30
+        elif market_breadth is not None and not pd.isna(market_breadth):
             if market_breadth < 0.35:
                 cold_threshold = 0.35   # 熊市冰点：放宽准入
             elif market_breadth < 0.55:

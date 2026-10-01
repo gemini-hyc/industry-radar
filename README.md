@@ -5,6 +5,10 @@
 
 > **接手必读**：[`docs/system-audit-and-roadmap.md`](docs/system-audit-and-roadmap.md) —— 系统问题审计与改造路线（2026-09-23）。
 > 含：系统现状速查 / 11 项问题（附证据位置）/ 改造优先级与验收标准 / Agent 操作须知与陷阱 / 数值基线（回归检测用）。
+>
+> **⚠️ 本仓库文档与代码不符时，一律以代码为准。** 历史回测数字（旧口径）不可与信号台账的
+> 超额数字直接比较 —— 两者在收益口径、样本规则、数据地基上均不同。
+> 待办与决策清单：[`docs/action-items.md`](docs/action-items.md)（源端执行项 / 待拍板项 / 已完成归档）。
 
 ## 链路全景
 
@@ -29,7 +33,7 @@ scripts/build_members_daily.py  ← 日更：按交易日历展开每日快照
         scripts/build_industry_daily_full.py     等权行业日频聚合（nav_e 上游）
         scripts/update_industry_factor.py        拥挤度因子 ind_crowd
                       ▼
-        scripts/industry_tracker.py              贝叶斯反转跟踪引擎（四阶段生命周期）
+        scripts/industry_tracker.py              贝叶斯反转跟踪引擎（六阶段生命周期）
         scripts/mainline_detector.py             主线探测器（方向群聚类）
         scripts/regime_classifier.py             行业 regime 分类
                       ▼
@@ -86,7 +90,7 @@ SCHEDULED=1 bash 每日行业报告.command    # 静默模式（不弹 TextEdit�
 单步手动：
 
 ```bash
-cd ~/quant/industry-radar
+cd ~/Quant/industry-radar
 python3 scripts/build_members_daily.py                 # 日更：每日成分快照（新交易日必须重建，否则该日被静默跳过）
 python3 scripts/compute_weighted_returns.py            # 日更：加权涨跌幅（circ_mv 加权，按日期 upsert）
 python3 scripts/build_industry_daily_full.py --days 60 # 日更：等权行业日频聚合（MA20/13 预热需 ≥33 天）
@@ -132,15 +136,23 @@ cron 入口检测到 `1` 会以非零码退出，避免缺数被静默吞掉。
 
 ## 口径备忘（继承自 Hermes，详见 docs/）
 
-- 行业划分：富途 Plate.INDUSTRY（申万二级近似），约定 131 个行业；名称与申万2021 二级 131/131 匹配
+- 行业划分：富途 Plate.INDUSTRY（申万二级近似），约定 131 个行业；名称与申万2021 二级 131/131 匹配。
+  注：早期交易日（申万分类演化期）实际只有 127 个行业有成分，属正常，**不是缺数**
 - **成分口径**：日更聚合用 `industry_members_daily.parquet`（Tushare `index_member_all` 申万原始成分，
   带 `in_date/out_date`），按**当日真实成分**聚合以消除前视偏差；`industry_members.parquet` 仅作行业全集/名称字典
 - **加权口径**：`circ_mv`（流通市值）加权，与通达信 881xxx / 申万官方行业指数同口径；
   实测对标通达信官方点位平均绝对误差 ~0.10pp（总市值口径为 ~0.14pp）
 - 复盘模块二三区框架：冷区（宽度<阈值，宽度反转信号）/ 中区 / 热区（待实现信号挖掘）
 - 反转跟踪：Sₜ = Sₜ₋₁ × λₜ，S₀ = C1(宽度) × C3(涨幅)，C0/C2/C4 已废弃（2026-08-02）
-- 五阶段生命周期：沉睡→唤醒→成长(R<8%)→成熟(R≥8%不可逆)→预警(2-of-4)→衰退
-- 主线择时 v3：31 申万一级方向群，主线 = 热度>1.3x + 超额60d>0，确认窗口法判瓦解
+- 生命周期（**六阶段，以 `industry_tracker.py` 为准**）：沉睡 → 早期(唤醒) → 成长(R<8%) →
+  成熟(R≥8% 不可逆) → 预警(2-of-4，或保底：MA5 下穿 MA21 持续 2 天且间距>0.5%) →
+  衰退(死叉确认)。跟踪池只统计其中 4 个态（early/growing/mature/alarming），
+  `sleeping`/`decaying` 是进出态，不计入跟踪数
+- 主线择时（**以 `mainline_detector.py` 为准**）：方向群由**相关系数聚类**自动生成
+  （`cluster_industries(corr_threshold=0.6)`，群数与成员随数据变化，**不是固定 31 个申万一级群**）；
+  主线判据 = 热度 ≥1.3x **且** 20 日超额 ≥0.3%/日 **且** 20 日超额胜率 ≥0.6；
+  阶段（蛰伏/启动期/加速期/见顶期/瓦解期）只用 `heat_ratio` + `excess_ma20` 两维判定，
+  代码中**没有**"确认窗口法"。⚠️ 当前无最小成员数/跨期稳定性约束（见 `docs/action-items.md` D2）
 
 ## 目录结构
 
