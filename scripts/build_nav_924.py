@@ -27,9 +27,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import DATA_DIR
+from src.utils.provenance import save_dataframe
 
 INDUSTRY_DIR = DATA_DIR / "industry"
 OUT_PATH = INDUSTRY_DIR / "industry_nav_924.parquet"
+HS300_PATH = DATA_DIR / "index_daily" / "000300.SH.parquet"
 BASE = pd.Timestamp("2024-09-24")
 
 
@@ -49,7 +51,7 @@ def main():
     e = e[e["date"] >= BASE].rename(columns={"con_code": "ind_code"})[["date", "ind_code", "avg_pct"]]
 
     # 3. 沪深300 基准
-    hs = pd.read_parquet(DATA_DIR / "index_daily" / "000300.SH.parquet")
+    hs = pd.read_parquet(HS300_PATH)
     hs["date"] = pd.to_datetime(hs["trade_date"].astype(str), format="%Y%m%d")
     hs = hs[hs["date"] >= BASE][["date", "pct_chg"]].rename(columns={"pct_chg": "bench_pct"})
     bench_nav = (1 + hs.set_index("date")["bench_pct"] / 100).cumprod() * 100
@@ -88,9 +90,17 @@ def main():
     out = out[["date", "ind_code", "ind_name", "nav_w", "nav_e",
                "nav_hs300", "rs_w", "mom20_w", "mom60_w"]]
     out = out.sort_values(["date", "ind_code"]).reset_index(drop=True)
-    out.to_parquet(OUT_PATH, index=False)
+    written = save_dataframe(
+        out, OUT_PATH,
+        producer="scripts/build_nav_924.py",
+        params={"base_date": str(BASE.date()), "weight": "circ_mv", "benchmark": "000300.SH"},
+        inputs=[INDUSTRY_DIR / "industry_weighted_returns.parquet",
+                INDUSTRY_DIR / "industry_daily_full.parquet",
+                HS300_PATH,
+                INDUSTRY_DIR / "industry_members.parquet"],
+    )
 
-    print(f"✓ 保存: {OUT_PATH}")
+    print(f"✓ 保存: {written}")
     print(f"  行业数: {out['ind_code'].nunique()}  交易日: {out['date'].nunique()}")
     print(f"  基期: {BASE.date()} = 100")
     last = out[out["date"] == out["date"].max()]

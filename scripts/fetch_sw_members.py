@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import DATA_DIR
+from src.utils.provenance import save_dataframe
 
 INDUSTRY_DIR = DATA_DIR / "industry"
 OUT_PATH = INDUSTRY_DIR / "index_member_all_raw.parquet"
@@ -59,8 +60,13 @@ def main():
     df["in_date"] = df["in_date"].apply(lambda x: str(x) if x else "")
     df["out_date"] = df["out_date"].apply(lambda x: str(x) if x else "")
     print(f"合并: {len(df)} 行, 行业数(index_code唯一): {df['index_code'].nunique()}")
-    df.to_parquet(OUT_PATH, index=False)
-    print(f"✓ 保存: {OUT_PATH}")
+    written = save_dataframe(
+        df, OUT_PATH,
+        producer="scripts/fetch_sw_members.py",
+        params={"api": "index_member_all", "src": "tushare-direct"},
+        extra={"n_industries": int(df["index_code"].nunique())},
+    )
+    print(f"✓ 保存: {written}")
 
 
 if __name__ == "__main__":

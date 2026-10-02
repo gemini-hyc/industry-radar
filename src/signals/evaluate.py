@@ -23,6 +23,7 @@ import pandas as pd
 from src.paths import INDUSTRY_DIR, SIGNALS_DIR
 from src.signals import ledger as L
 from src.signals.sources import SOURCE_SPECS, STATUS_LABEL, STATUS_ORDER
+from src.utils.provenance import save_text
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +282,11 @@ def render_markdown(
 
 def save_eval_report(markdown: str, path: Optional[Path] = None) -> Path:
     p = Path(path) if path else SIGNALS_DIR / f"eval_{datetime.now():%Y%m%d}.md"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(markdown, encoding="utf-8")
-    logger.info("评估报告已保存: %s", p)
-    return p
+    saved = save_text(
+        markdown, p,
+        producer="src/signals/evaluate.py",
+        params={"horizons": list(L.HORIZONS)},
+        inputs=[SIGNALS_DIR / "signals_log.parquet", REGIME_PATH],
+    )
+    logger.info("评估报告已保存: %s", saved)
+    return saved

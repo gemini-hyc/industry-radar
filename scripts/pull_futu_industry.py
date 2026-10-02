@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import FUTU_HOST, FUTU_PORT, INDUSTRY_DIR
+from src.utils.provenance import save_dataframe
 
 OUTPUT_DIR = INDUSTRY_DIR
 
@@ -205,13 +206,21 @@ def main():
         }).reset_index(drop=True)
 
         # Step 4: 保存
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        list_df.to_parquet(OUTPUT_DIR / "industry_list.parquet", index=False)
-        member_df.to_parquet(OUTPUT_DIR / "industry_members.parquet", index=False)
+        params = {"src": "futu-opend", "host": FUTU_HOST, "port": FUTU_PORT}
+        p_list = save_dataframe(
+            list_df, OUTPUT_DIR / "industry_list.parquet",
+            producer="scripts/pull_futu_industry.py", params=params,
+            inputs=[], extra={"n_industries": len(list_df)},
+        )
+        p_mem = save_dataframe(
+            member_df, OUTPUT_DIR / "industry_members.parquet",
+            producer="scripts/pull_futu_industry.py", params=params,
+            inputs=[], extra={"n_industries": int(member_df["ind_code"].nunique())},
+        )
 
         print(f"\n✅ 已保存:")
-        print(f"   industry_list.parquet    — {len(list_df)} 个行业")
-        print(f"   industry_members.parquet — {len(member_df)} 条记录")
+        print(f"   {p_list}    — {len(list_df)} 个行业")
+        print(f"   {p_mem} — {len(member_df)} 条记录")
 
     finally:
         ctx.close()

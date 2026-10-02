@@ -60,6 +60,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import INDUSTRY_DIR, DATA_DIR
+from src.utils.provenance import save_dataframe
 
 DATA_PATH = INDUSTRY_DIR / 'industry_weighted_returns.parquet'
 OUT_PATH = INDUSTRY_DIR / 'daily_regime.parquet'
@@ -462,12 +463,22 @@ def main() -> int:
         except Exception as e:
             print(f"\n⚠️ 旧文件读取失败（{e}），跳过行数护栏")
 
-    daily_df.to_parquet(OUT_PATH, index=False)
-    print(f"\n已保存: {OUT_PATH}")
+    written = save_dataframe(
+        daily_df, OUT_PATH,
+        producer="scripts/regime_classifier.py",
+        params={"classifier": "regime_v2", "validity": "state-description-only"},
+        inputs=[DATA_PATH, SENTI_PATH],
+    )
+    print(f"\n已保存: {written}")
     print(f"  {daily_df.shape[0]}天 x {daily_df.shape[1]}列")
 
-    ms_df.to_csv(OUT_PATH.parent / 'monthly_regime_summary.csv', index=False)
-    print(f"  月度汇总: {OUT_PATH.parent / 'monthly_regime_summary.csv'}")
+    written_ms = save_dataframe(
+        ms_df, OUT_PATH.parent / 'monthly_regime_summary.csv',
+        producer="scripts/regime_classifier.py",
+        params={"classifier": "regime_v2", "aggregation": "monthly"},
+        inputs=[DATA_PATH],
+    )
+    print(f"  月度汇总: {written_ms}")
 
     return 0
 

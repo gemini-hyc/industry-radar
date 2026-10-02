@@ -22,6 +22,7 @@ warnings.filterwarnings('ignore')
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import INDUSTRY_DIR
+from src.utils.provenance import save_dataframe
 
 
 def load_data():
@@ -351,9 +352,15 @@ def run_full_detection(reference_date=None):
         print(f"     行业: {', '.join(r['group_names'][:6])}")
     
     # 保存结果
-    results.to_csv(INDUSTRY_DIR / 'mainline_detection.csv', index=False)
-    print(f"\n结果已保存到 {INDUSTRY_DIR / 'mainline_detection.csv'}")
-    
+    written = save_dataframe(
+        results, INDUSTRY_DIR / 'mainline_detection.csv',
+        producer="scripts/mainline_detector.py",
+        inputs=[INDUSTRY_DIR / 'industry_weighted_returns.parquet',
+                INDUSTRY_DIR / 'industry_daily_full.parquet',
+                INDUSTRY_DIR / 'industry_list.parquet'],
+    )
+    print(f"\n结果已保存到 {written}")
+
     return results, group_signals, valid_groups, corr_matrix
 
 

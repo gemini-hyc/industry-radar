@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from src.paths import DATA_DIR, INDUSTRY_DIR, SIGNALS_DIR
+from src.utils.provenance import save_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -139,9 +140,13 @@ def build_panel(
     panel = pd.concat([cached, fresh], ignore_index=True) if len(cached) else fresh
     panel = panel[PANEL_COLS].sort_values(["date", "ind_code"]).reset_index(drop=True)
 
-    PANEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    panel.to_parquet(PANEL_PATH, index=False)
-    logger.info("两融面板已更新: %s（%d 天 / %d 行）", PANEL_PATH, panel["date"].nunique(), len(panel))
+    written = save_dataframe(
+        panel, PANEL_PATH,
+        producer="src/signals/sentiment.py",
+        params={"factor": "margin_ratio=Σ(rzye)/circ_mv", "pit_start": str(PIT_START.date())},
+        inputs=[MARGIN_DIR, MEMBERS_PIT_PATH, MEMBERS_STATIC_PATH],
+    )
+    logger.info("两融面板已更新: %s（%d 天 / %d 行）", written, panel["date"].nunique(), len(panel))
     return panel
 
 

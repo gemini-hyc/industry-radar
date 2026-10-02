@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import STOCK_BASIC_PATH, DATA_DIR
+from src.utils.provenance import save_dataframe
 
 # Load
 df = pd.read_parquet(STOCK_BASIC_PATH)
@@ -34,8 +35,13 @@ for ind in valid_industries:
     })
 
 ind_df = pd.DataFrame(universe)
-ind_df.to_parquet(DATA_DIR / 'industry_universe.parquet', index=False)
-print(f"\nindustry_universe.parquet saved: {len(ind_df)} rows")
+written = save_dataframe(
+    ind_df, DATA_DIR / 'industry_universe.parquet',
+    producer="scripts/build_industry_universe.py",
+    params={"min_stocks": 15},
+    inputs=[STOCK_BASIC_PATH],
+)
+print(f"\nindustry_universe.parquet saved: {len(ind_df)} rows → {written}")
 
 # Show bottom-end industries (smallest valid)
 print(f"\n最小行业 (刚好≥15只):")

@@ -27,13 +27,14 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.paths import INDUSTRY_DIR
+from src.paths import INDUSTRY_DIR, MARKET_DIR
 from src.utils.market_data import (
     load_recent_market,
     compute_concept_daily,
     load_industry_members,
     load_industry_members_daily,
 )
+from src.utils.provenance import save_dataframe
 
 OUT_PATH = INDUSTRY_DIR / "industry_daily_full.parquet"
 
@@ -126,8 +127,17 @@ def main(days: int = 2000, force_overwrite: bool = False,
             print("   修复后重跑；确认要整表重建时加 --force-overwrite。")
             return 1
 
-    daily.to_parquet(OUT_PATH, index=False)
-    print(f"✅ 已保存 {OUT_PATH}")
+    written = save_dataframe(
+        daily, OUT_PATH,
+        producer="scripts/build_industry_daily_full.py",
+        params={"days": days, "force_overwrite": force_overwrite,
+                "allow_static_fallback": allow_static_fallback},
+        inputs=[MARKET_DIR,
+                INDUSTRY_DIR / "industry_members_daily.parquet",
+                INDUSTRY_DIR / "industry_members.parquet"],
+        extra={"n_existing_before": n_existing},
+    )
+    print(f"✅ 已保存 {written}")
     print(f"   {len(daily)} 行, {daily['con_code'].nunique()} 行业, "
           f"{daily['date'].min().date()} ~ {daily['date'].max().date()}")
     return 0

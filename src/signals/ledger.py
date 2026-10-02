@@ -41,6 +41,7 @@ import numpy as np
 import pandas as pd
 
 from src.paths import INDUSTRY_DIR, SIGNALS_LOG_PATH
+from src.utils.provenance import save_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -91,10 +92,16 @@ def load_ledger(path: Optional[PathLike] = None) -> pd.DataFrame:
 
 def save_ledger(ledger: pd.DataFrame, path: Optional[PathLike] = None) -> Path:
     p = _resolve_path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    _normalize(ledger).to_parquet(p, index=False)
-    logger.info("信号台账已保存: %s (%d 条)", p, len(ledger))
-    return p
+    df = _normalize(ledger)
+    saved = save_dataframe(
+        df, p,
+        producer="src/signals/ledger.py",
+        params={"horizons": list(HORIZONS), "keys": KEYS, "benchmark": BENCHMARK_LABEL},
+        inputs=[WEIGHTED_RETURNS_PATH],
+        extra={"n_sources": int(df["source"].nunique()) if len(df) else 0},
+    )
+    logger.info("信号台账已保存: %s (%d 条)", saved, len(df))
+    return saved
 
 
 def make_row(

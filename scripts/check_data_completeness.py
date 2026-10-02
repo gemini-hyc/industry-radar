@@ -8,10 +8,12 @@
   3. 成分漂移 —— 某行业当日成分股数相对自身历史骤降（数据面缺股）
   4. 源数据缺位 —— market/daily 或 daily_basic 缺当日文件
   5. 上游滞后 —— 等权源 industry_daily_full 落后于目标日
+  6. 产物指纹缺位 —— 已登记产物没有 <文件名>.meta.json（来历不明 / 接入指纹前的存量）
 
 用法:
     python3 scripts/check_data_completeness.py [--date YYYY-MM-DD]
                                                [--json] [--quiet] [--no-write]
+    python3 scripts/check_data_completeness.py --audit-writes   # 审计未登记写入（人工，不判 rc）
 
 退出码:
     0  健康
@@ -31,7 +33,9 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.paths import MARKET_DIR, BASIC_DIR, INDUSTRY_DIR, DATA_DIR
+from src.paths import (MARKET_DIR, BASIC_DIR, INDUSTRY_DIR, DATA_DIR,
+                       ARTIFACTS, DERIVED_DIRS)
+from src.utils.provenance import load_meta, git_info, sidecar_path, save_json, SIDECAR_SUFFIX
 
 ADJ_DIR = DATA_DIR / "adj_factor"
 LIMIT_DIR = DATA_DIR / "stk_limit"
@@ -499,14 +503,116 @@ def check_daily_full(t: pd.Timestamp):
     return [], {"latest": str(last.date())}
 
 
-# ─────────────────────────── 主流程 ───────────────────────────
+# ─────────────────────── 产物指纹（provenance）───────────────────────
+def check_provenance():
+    """6. 已登记产物是否带 <文件名>.meta.json 指纹。
+
+    判定规则（对应 src/paths.py:ARTIFACTS 登记表，唯一真相来源）：
+      · 产物存在但缺指纹   → WARNING（接入指纹前的存量，或由未登记的写入方产出）
+      · 指纹记录了 dirty   → WARNING（产物出自未提交的工作区代码，不可复现）
+      · 指纹 commit ≠ HEAD → **只进 summary 不做告警**：每次提交都会让存量产物「漂移」，
+                             升级成 issue 会天天误报；它作为可见信息供人工判断。
+    """
+    head = (git_info() or {}).get("commit")
+    out, missing, dirty, ok, stale = [], [], [], [], []
+    for name, (path, _kind) in sorted(ARTIFACTS.items()):
+        if not Path(path).exists():
+            continue
+        meta = load_meta(path)
+        if meta is None:
+            missing.append(name)
+            continue
+        ok.append(name)
+        git = meta.get("git") or {}
+        if git.get("dirty"):
+            dirty.append(name)
+        if git.get("commit") and head and git["commit"] != head:
+            stale.append(name)
+
+    if missing:
+        out.append(issue(
+            WARNING, "PROV_MISSING",
+            f"{len(missing)} 个已登记产物缺指纹(.meta.json): {', '.join(missing)}",
+            fix="多为接入指纹前的存量产物 —— 重跑对应脚本即可补齐；"
+                "若重跑后仍缺，说明该产物由未登记的写入方产出，请登记到 src/paths.py:ARTIFACTS",
+            artifacts=missing))
+    if dirty:
+        out.append(issue(
+            WARNING, "PROV_DIRTY",
+            f"{len(dirty)} 个产物出自**未提交**的工作区代码（不可复现）: {', '.join(dirty)}",
+            fix="提交改动后重跑对应脚本，指纹才会指向一个可复现的提交",
+            artifacts=dirty))
+
+    stats = {"checked": len(ok) + len(missing), "with_meta": len(ok),
+             "missing": len(missing), "dirty": len(dirty),
+             "code_drift": stale, "current_commit": head}
+    return out, stats
+
+
+def audit_unregistered_writes():
+    """审计「未登记写入」：派生目录里既不是登记产物、也不是其指纹的数据文件。
+
+    这是「谁在往数据根写东西」的探针 —— 历史教训：signals/industry_margin_daily.parquet
+    与 factors/stock/*.parquet 曾长期 owner 不明。不参与日更退出码，人工调用。
+    """
+    known = set()
+    for path, _kind in ARTIFACTS.values():
+        p = Path(path)
+        known.add(p)
+        known.add(sidecar_path(p))
+
+    exts = {".parquet", ".csv", ".tsv", ".json", ".py"}
+    groups: dict = {}
+    for d in DERIVED_DIRS:
+        d = Path(d)
+        if not d.exists():
+            continue
+        for f in sorted(d.rglob("*")):
+            if (not f.is_file() or f.name.startswith(".")
+                    or f.name.endswith(SIDECAR_SUFFIX)
+                    or f.suffix.lower() not in exts
+                    or f in known):
+                continue
+            groups.setdefault(str(f.parent), []).append(f)
+    return groups
+
+
+def print_audit_report(groups: dict, samples: int = 6):
+    """打印未登记写入审计结果（按目录归组，供人工清理 / 补齐 ARTIFACTS 登记表）。"""
+    line = "═" * 62
+    print(line)
+    print("  数据根「未登记写入」审计")
+    print(line)
+    if not groups:
+        print("  ✅ 派生目录内没有未登记的数据文件")
+        return
+    total = sum(len(v) for v in groups.values())
+    root = str(DATA_DIR)
+    print(f"  共 {total} 个文件：既不在 ARTIFACTS 登记表内，也没有 <文件名>.meta.json 指纹")
+    for d, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        size = sum(f.stat().st_size for f in items if f.exists())
+        print(f"\n  ▸ {d.replace(root, '<数据根>')}  （{len(items)} 个 / {size / 1e6:.1f} MB）")
+        for f in items[:samples]:
+            print(f"      {f.name:<46} {f.stat().st_size:>12,} B")
+        if len(items) > samples:
+            print(f"      … 另有 {len(items) - samples} 个")
+    print("\n  处置：① 属产物的 → 登记到 src/paths.py:ARTIFACTS 并接入指纹；")
+    print("        ② 属原料/外部抓取的 → 按 fetched 登记；③ 属历史遗留的 → 归档到 _archive/。")
+
+
 def main():
     ap = argparse.ArgumentParser(description="行业数据日更完备性监控")
     ap.add_argument("--date", default=None, help="目标交易日 YYYY-MM-DD，默认取最新行情日")
     ap.add_argument("--json", action="store_true", help="只输出 JSON")
     ap.add_argument("--quiet", action="store_true", help="只输出结论行")
     ap.add_argument("--no-write", action="store_true", help="不写状态文件")
+    ap.add_argument("--audit-writes", action="store_true",
+                    help="审计派生目录里的未登记写入（人工用，不参与退出码）")
     args = ap.parse_args()
+
+    if args.audit_writes:
+        print_audit_report(audit_unregistered_writes())
+        sys.exit(0)
 
     t, src = resolve_target_date(args.date)
     report = {"checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -517,9 +623,10 @@ def main():
         report["status"], report["exit_code"] = status, code
         if not args.no_write:
             try:
-                STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-                with open(STATUS_PATH, "w", encoding="utf-8") as f:
-                    json.dump(report, f, ensure_ascii=False, indent=2)
+                save_json(report, STATUS_PATH,
+                          producer="scripts/check_data_completeness.py",
+                          params={"target_date": report.get("target_date")},
+                          extra={"status": report.get("status")})
             except Exception as e:
                 print(f"⚠️ 状态文件写入失败: {e}")
         if args.json:
@@ -563,6 +670,9 @@ def main():
     fu_issues, fu_stats = check_daily_full(t)
     issues += fu_issues
     report["summary"]["daily_full"] = fu_stats
+    pv_issues, pv_stats = check_provenance()
+    issues += pv_issues
+    report["summary"]["provenance"] = pv_stats
 
     report["issues"] = issues
     n_crit = sum(1 for i in issues if i["level"] == CRITICAL)
@@ -618,6 +728,15 @@ def print_report(report: dict, msg: str = ""):
                     bits.append("空值: " + ",".join(empty))
                 if bits:
                     print("  情绪数据  : " + " / ".join(bits))
+            pv = s.get("provenance") or {}
+            if pv.get("checked"):
+                extra_txt = ""
+                if pv.get("code_drift"):
+                    extra_txt += f"  代码漂移 {len(pv['code_drift'])}"
+                if pv.get("current_commit"):
+                    extra_txt += f"  当前提交 {pv['current_commit']}"
+                print(f"  产物指纹  : {pv.get('with_meta', 0)}/{pv.get('checked', 0)} 有指纹"
+                      f"（缺 {pv.get('missing', 0)}，脏 {pv.get('dirty', 0)}）{extra_txt}")
     if report["issues"]:
         print()
         for it in report["issues"]:

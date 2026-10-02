@@ -16,6 +16,7 @@ import numpy as np
 # ── 配置（统一走 src/paths.py，消除容器路径硬编码）──
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import INDUSTRY_DIR, FACTOR_DIR
+from src.utils.provenance import save_dataframe, save_json
 
 STATE_FILE = INDUSTRY_DIR / "tracker_state.json"
 REPORT_FILE = INDUSTRY_DIR / "tracker_report.csv"
@@ -358,10 +359,10 @@ class BayesianTracker:
             self.state = {}
     
     def save_state(self):
-        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(STATE_FILE, "w") as f:
-            json.dump(self.state, f, ensure_ascii=False, indent=2)
-        print(f"[状态] 已保存 {len(self.state)} 行业记录 → {STATE_FILE}")
+        p = save_json(self.state, STATE_FILE,
+                      producer="scripts/industry_tracker.py",
+                      params={"kind": "tracker_state", "n_industries": len(self.state)})
+        print(f"[状态] 已保存 {len(self.state)} 行业记录 → {p}")
     
     # ── 正向扫描 ──
     
@@ -904,8 +905,13 @@ class BayesianTracker:
                 "elim_reason": entry.get("elim_reason", ""),
             })
         df = pd.DataFrame(rows)
-        df.to_csv(REPORT_FILE, index=False)
-        print(f"\n[报告] 已输出 → {REPORT_FILE}")
+        written = save_dataframe(
+            df, REPORT_FILE,
+            producer="scripts/industry_tracker.py",
+            params={"kind": "tracker_report", "n_rows": len(df)},
+            inputs=[WEIGHTED_PATH, CROWD_FACTOR_PATH],
+        )
+        print(f"\n[报告] 已输出 → {written}")
         
         # 打印跟踪池（按phase分组：early → growing → mature → alarming）
         tracking = [r for r in rows if r["status"] == "tracking"]

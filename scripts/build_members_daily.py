@@ -24,6 +24,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import DATA_DIR, MARKET_DIR
+from src.utils.provenance import save_dataframe
 
 INDUSTRY_DIR = DATA_DIR / "industry"
 OUT_NAME = "industry_members_daily.parquet"
@@ -99,8 +100,13 @@ def main(base: str = None) -> int:
         except Exception as e:
             print(f"  ⚠️ 旧文件读取失败（{e}），跳过护栏")
 
-    out.to_parquet(out_path, index=False)
-    print(f"✓ 保存 {OUT_NAME}: {out.shape[0]} 行 "
+    saved = save_dataframe(
+        out, out_path,
+        producer="scripts/build_members_daily.py",
+        params={"base": base or "全历史"},
+        inputs=[raw_path, mp_path, MARKET_DIR],
+    )
+    print(f"✓ 保存 {saved}: {out.shape[0]} 行 "
           f"{out['ind_code'].nunique()} 行业 × {out['date'].nunique()} 天")
     for d in [dates[0], dates[-1]]:
         sub = out[out["date"] == d]

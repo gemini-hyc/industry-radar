@@ -30,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))  # 兼容脚本直跑: python3 src/daily_review/module_02_industry.py
 from src.paths import DATA_DIR
+from src.utils.provenance import save_dataframe, save_text, save_json
 
 # 数据路径常量
 WEIGHTED_RETURNS_PATH = DATA_DIR / "industry" / "industry_weighted_returns.parquet"
@@ -215,10 +216,14 @@ def load_or_compute_industry_daily(days: int = 60, end_date: str = None) -> pd.D
 
     # 写入缓存（失败不阻塞主流程）
     try:
-        INDUSTRY_DAILY_CACHE.parent.mkdir(parents=True, exist_ok=True)
-        daily.to_parquet(INDUSTRY_DAILY_CACHE, index=False)
-    except Exception:
-        pass
+        save_dataframe(
+            daily, INDUSTRY_DAILY_CACHE,
+            producer="src/daily_review/module_02_industry.py",
+            params={"kind": "daily_cache"},
+            inputs=[WEIGHTED_RETURNS_PATH, MARKET_DAILY_DIR],
+        )
+    except Exception as e:
+        logging.warning("行业日频缓存写入跳过: %s", e)
 
     return daily
 
@@ -503,9 +508,12 @@ def _write_m02_conclusion_json(trade_date: str, conclusion: Dict) -> Optional[Pa
     """将模块二结构化结论写入 JSON 文件"""
     try:
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        path = REPORTS_DIR / f"{trade_date}_module_02_conclusion.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(conclusion, f, ensure_ascii=False, indent=2)
+        path = save_json(
+            conclusion, REPORTS_DIR / f"{trade_date}_module_02_conclusion.json",
+            producer="src/daily_review/module_02_industry.py",
+            params={"trade_date": trade_date, "kind": "module_02_conclusion"},
+            inputs=[WEIGHTED_RETURNS_PATH],
+        )
         logging.info("模块二结构化结论已写入 %s", path)
         return path
     except Exception as e:
@@ -635,8 +643,13 @@ def run(trade_date: str = None) -> str:
     # ── 持久化报告 ──
     try:
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        report_path = REPORTS_DIR / f"{trade_date}_industry_review.md"
-        report_path.write_text(report_md, encoding="utf-8")
+        report_path = save_text(
+            report_md, REPORTS_DIR / f"{trade_date}_industry_review.md",
+            producer="src/daily_review/module_02_industry.py",
+            params={"trade_date": trade_date, "kind": "industry_review_report",
+                    "n_errors": len(errors)},
+            inputs=[WEIGHTED_RETURNS_PATH, INDUSTRY_DAILY_CACHE],
+        )
         logging.info("行业跟踪报告已保存: %s", report_path)
     except Exception as e:
         logging.error("行业跟踪报告保存失败: %s", e)

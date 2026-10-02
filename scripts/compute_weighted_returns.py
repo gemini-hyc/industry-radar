@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.paths import MARKET_DIR, BASIC_DIR, INDUSTRY_DIR, STK_LIMIT_DIR
 from src.utils.data_quality import load_list_dates, load_no_limit_flags, mark_abnormal
+from src.utils.provenance import save_dataframe
 
 OUT_PATH = INDUSTRY_DIR / "industry_weighted_returns.parquet"
 
@@ -157,8 +158,16 @@ def main(days: int = 250):
         print(f"  upsert: 保留窗口外 {len(kept)} 条，本次覆盖 {lo.date()} ~ {hi.date()}"
               f"，{n_existing} → {len(result)} 行")
 
-    result.to_parquet(OUT_PATH, index=False)
-    print(f"\n✓ 保存: {OUT_PATH}")
+    written = save_dataframe(
+        result, OUT_PATH,
+        producer="scripts/compute_weighted_returns.py",
+        params={"days": days, "weight": "circ_mv",
+                "abnormal_filter": "no_limit_flags+list_dates"},
+        inputs=[members_daily_path, MARKET_DIR, BASIC_DIR, STK_LIMIT_DIR],
+        extra={"n_abnormal_dropped": n_dropped, "n_abnormal_scanned": n_raw,
+               "skipped_days_no_snapshot": [str(d.date()) for d in sorted(skipped)]},
+    )
+    print(f"\n✓ 保存: {written}")
     print(f"  行业数: {result['ind_code'].nunique()}")
     print(f"  日期范围: {result['date'].min().date()} ~ {result['date'].max().date()}")
 

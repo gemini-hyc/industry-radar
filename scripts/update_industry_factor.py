@@ -23,6 +23,7 @@ import pandas as pd
 import numpy as np
 
 from src.paths import MARKET_DIR, FACTOR_DIR, INDUSTRY_DIR
+from src.utils.provenance import save_dataframe
 
 DAILY_DIR = MARKET_DIR
 FACTOR_DIR = FACTOR_DIR
@@ -124,7 +125,13 @@ def main():
                 print(f"    进度: {i + 1}/{len(all_days)}")
         updated = pd.concat(result_frames, ignore_index=True)
         os.makedirs(FACTOR_DIR, exist_ok=True)
-        updated.to_parquet(factor_path, index=False)
+        save_dataframe(
+            updated, factor_path,
+            producer="scripts/update_industry_factor.py",
+            params={"mode": "full", "min_industry_stocks": 15,
+                    "window_short": 20, "window_long": 60},
+            inputs=[members_path, DAILY_DIR],
+        )
         print(f"✅ 全量写入: {len(updated)} 行, {updated['date'].nunique()} 天")
     else:
         # 增量：只处理最新日
@@ -144,7 +151,14 @@ def main():
         # 7. 追加到已有文件
         new_row = stock_factor[['date', 'code', 'value']].copy()
         updated = pd.concat([existing, new_row], ignore_index=True)
-        updated.to_parquet(factor_path, index=False)
+        save_dataframe(
+            updated, factor_path,
+            producer="scripts/update_industry_factor.py",
+            params={"mode": "incremental", "min_industry_stocks": 15,
+                    "window_short": 20, "window_long": 60,
+                    "compute_window_files": len(compute_files)},
+            inputs=[members_path, DAILY_DIR],
+        )
         print(f"✅ 已更新: {len(updated)} 行, {updated['date'].nunique()} 天")
 
 

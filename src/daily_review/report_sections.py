@@ -22,7 +22,7 @@ from typing import List, Optional
 
 import pandas as pd
 
-from src.paths import INDUSTRY_DIR, REPORTS_DIR
+from src.paths import INDUSTRY_DIR, REPORTS_DIR, resolve_output_path
 
 logger = logging.getLogger(__name__)
 
@@ -317,8 +317,11 @@ def append_to_report(trade_date: str, extra: str) -> Optional[Path]:
 
     报告文件不存在（如 module_02 未产出）时不创建、返回 None，
     以免掩盖主报告生成失败的事实。
+
+    写入路径经 src.paths.resolve_output_path —— 从端写保护（拒绝 / 重定向到沙箱）。
+    不加这一步，在只读副本上会绕过保护、直接追加进真实数据根的报告里。
     """
-    path = REPORTS_DIR / f"{trade_date}_industry_review.md"
+    path = Path(resolve_output_path(REPORTS_DIR / f"{trade_date}_industry_review.md"))
     if not path.exists():
         logger.warning("报告文件不存在，跳过附加章节: %s", path)
         return None
