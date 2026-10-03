@@ -571,15 +571,24 @@ class BayesianTracker:
             crowd_today = self._get_crowd_percentile(date_str, code)
             # w₄ 基线改为前5日均值（07-16: 日间噪声→短期趋势，与成交额5日均线对齐）
             idx = date_to_idx.get(eval_date, -1)
-            crowd_vals = [crowd_today]  # 含当日，取中位数时更稳健
-            for offset in range(1, 6):  # 回溯1-5天
-                back_date = str(all_dates[idx - offset].date()) if idx - offset >= 0 else None
-                if back_date:
-                    cv = self._get_crowd_percentile(back_date, code)
-                    if cv is not None:
-                        crowd_vals.append(cv)
-            crowd_vals.sort()
-            crowd_baseline = crowd_vals[len(crowd_vals) // 2]  # 中位数，抗极端值
+            # ⚠️ 健壮性修复（2026-10-03）：原实现无条件把 crowd_today 放进待排序列表，
+            #    当「当日拥挤度缺失（None）而前 5 日有值」时，crowd_vals.sort() 会抛
+            #    TypeError: '<' not supported between instances of 'NoneType' and 'float'。
+            #    触发条件 = 因子脚本先于行情数据更新造成的时序错位。
+            #    修法：当日缺失即不做 w₄ 分量（crowd_baseline=None → 因子中性回退 1.0），
+            #    其余分量照常更新 —— 正常路径（当日有值）行为逐字不变。
+            if crowd_today is None:
+                crowd_baseline = None
+            else:
+                crowd_vals = [crowd_today]  # 含当日，取中位数时更稳健
+                for offset in range(1, 6):  # 回溯1-5天
+                    back_date = str(all_dates[idx - offset].date()) if idx - offset >= 0 else None
+                    if back_date:
+                        cv = self._get_crowd_percentile(back_date, code)
+                        if cv is not None:
+                            crowd_vals.append(cv)
+                crowd_vals.sort()
+                crowd_baseline = crowd_vals[len(crowd_vals) // 2]  # 中位数，抗极端值
             lam = compute_lambda(row, yest, crowd_today, crowd_baseline)
             entry["score"] = min(max(entry["score"] * lam, 0), 100)
         # 更新Sₜ峰值

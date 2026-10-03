@@ -96,10 +96,18 @@ def cluster_industries(pivot, corr_threshold=0.6):
 
 
 def compute_group_signals(returns, idf, name_map, groups, corr_matrix, 
-                          lookback=20, history_start='2020-01-01'):
+                          lookback=20, history_start='2020-01-01',
+                          hist_min_periods=None):
     """
     计算每个方向群的成交额占比和超额收益信号
+
+    ⚠️ hist_mean_amt 为「截至当日」的扩张窗口均值（PIT 正确）。
+       原实现取 [history_start, 最后一天] 的**全样本均值**，等于把未来数据用于历史日期的分母，
+       对历史日期构成前视偏差；已在 2026-10-03 修正（见 docs/action-items.md D12）。
+       当参考日 = 数据最后一天时，扩张均值与全样本均值数值相同 ⇒ 本修正对日更产物零影响。
     """
+    if hist_min_periods is None:
+        hist_min_periods = lookback
     # 市场日均收益
     market_daily = returns.groupby('date')['weighted_pct'].mean().reset_index()
     market_daily.columns = ['date', 'market_pct']
@@ -133,19 +141,27 @@ def compute_group_signals(returns, idf, name_map, groups, corr_matrix,
             lambda x: (x > 0).mean(), raw=True
         )
         
-        # 5. 历史均值（用更长历史）
-        history_amt = group_amt[group_amt['date'] >= history_start]
-        hist_mean_amt = history_amt['amt_pct'].mean() if len(history_amt) > 0 else 0
-        
+        # 5. 历史均值基准 —— ⚠️ PIT 修正（D12）：改为「截至当日」的扩张窗口均值。
+        #    原实现取 [history_start, 最后一天] 的全样本均值 ⇒ 历史日期的分母里混入了未来数据。
+        hist = group_amt[group_amt['date'] >= pd.Timestamp(history_start)].sort_values('date')
+        hist = hist[['date', 'amt_pct']].copy()
+        hist['hist_mean_amt'] = hist['amt_pct'].expanding(min_periods=hist_min_periods).mean()
+        merged = merged.merge(hist[['date', 'hist_mean_amt']], on='date', how='left')
+        # 基准尚未成型的早期日期无值（NaN）→ 记 0，等价于"热度不可判定"
+        merged['hist_mean_amt'] = merged['hist_mean_amt'].fillna(0.0)
+
         # 6. 热度倍数
-        merged['heat_ratio'] = merged['amt_ma20'] / hist_mean_amt if hist_mean_amt > 0 else 0
-        
+        merged['heat_ratio'] = np.where(
+            merged['hist_mean_amt'] > 0,
+            merged['amt_ma20'] / merged['hist_mean_amt'],
+            0.0,
+        )
+
         group_signals[gid] = {
             'codes': codes,
             'names': group_names,
             'n_industries': len(codes),
             'data': merged,
-            'hist_mean_amt': hist_mean_amt,
         }
     
     return group_signals
@@ -201,20 +217,28 @@ def detect_mainline(group_signals, date,
         up_days = d_before[d_before['market_pct'] > 0]
         down_days = d_before[d_before['market_pct'] < 0]
         
-        offense = (up_days['excess'].mean() if len(up_days) > 10 else 0)
-        defense = (down_days['excess'].mean() if len(down_days) > 10 else 0)
-        
-        if abs(defense) > 0.01:
-            od_ratio = offense / abs(defense)
+        # ⚠️ 修复（D14）：原实现把"样本不足"回退成 0 ⇒ 下跌日均值=0 ⇒ od_ratio=inf ⇒ 误判「进攻型」。
+        #    改为：样本不足即标「未知」，不参与风格判定；样本充足时行为与原来逐字一致
+        #    （含 abs(defense)≤0.01 ⇒ inf 的原语义保留）。
+        if len(up_days) > 10 and len(down_days) > 10:
+            offense = up_days['excess'].mean()
+            defense = down_days['excess'].mean()
+
+            if abs(defense) > 0.01:
+                od_ratio = offense / abs(defense)
+            else:
+                od_ratio = float('inf')   # 下跌日超额≈0 ⇒ 比值发散（原语义保留）
+
+            if od_ratio > 1:
+                style = '进攻型'
+            elif od_ratio < -0.5:
+                style = '防御型'
+            else:
+                style = '混合型'
         else:
-            od_ratio = float('inf')
-        
-        if od_ratio > 1:
-            style = '进攻型'
-        elif od_ratio < -0.5:
-            style = '防御型'
-        else:
-            style = '混合型'
+            # 上涨日或下跌日样本 <10 天：数据不足以判定风格，标「未知」
+            od_ratio = float('nan')
+            style = '未知'
         
         results.append({
             'group_id': gid,
@@ -224,7 +248,7 @@ def detect_mainline(group_signals, date,
             'excess_ma20': excess_ma20,
             'winrate': winrate,
             'amt_ma20': amt_ma20,
-            'hist_mean_amt': gs['hist_mean_amt'],
+            'hist_mean_amt': float(row.get('hist_mean_amt', 0)),
             'is_mainline': is_mainline,
             'stage': stage,
             'style': style,
@@ -296,10 +320,19 @@ def run_full_detection(reference_date=None):
     """运行完整的主线检测流程"""
     print("加载数据...")
     returns, idf, name_map = load_data()
-    
-    # 构建pivot
-    pivot = returns.pivot(index='date', columns='ind_code', values='weighted_pct')
-    
+
+    # 参考日：未指定则取数据最后一天
+    if reference_date is None:
+        reference_date = returns['date'].max()
+    else:
+        reference_date = pd.Timestamp(reference_date)
+
+    # 构建pivot —— ⚠️ PIT 修正（D13）：聚类只允许使用 <= reference_date 的数据。
+    #    原实现用全样本（含参考日之后）算相关系数矩阵，对「回测历史日期」构成前视偏差；
+    #    生产时 reference_date = 数据最后一天 ⇒ 截断后与原来逐字节一致。
+    pivot_all = returns.pivot(index='date', columns='ind_code', values='weighted_pct')
+    pivot = pivot_all.loc[pivot_all.index <= reference_date]
+
     print("行业聚类...")
     groups, corr_matrix = cluster_industries(pivot, corr_threshold=0.6)
     
@@ -314,12 +347,6 @@ def run_full_detection(reference_date=None):
     
     print("\n计算方向群信号...")
     group_signals = compute_group_signals(returns, idf, name_map, valid_groups, corr_matrix)
-    
-    # 如果没有指定日期，用最新日期
-    if reference_date is None:
-        reference_date = returns['date'].max()
-    else:
-        reference_date = pd.Timestamp(reference_date)
     
     print(f"\n检测{reference_date.strftime('%Y-%m-%d')}的主线...")
     results = detect_mainline(group_signals, reference_date)
