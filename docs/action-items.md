@@ -16,8 +16,9 @@
 | A2 | `[ ]` | 同步 **`scripts/regime_classifier.py`** + 全量重算 + 重跑评估 | `docs/changes-2026-10-01-p2-regime.md` |
 | A3 | `[x]` | **P2-2/P2-3 异常样本剔除 + 宽度分母修正**（2026-10-01 完成，待同步） | `docs/changes-2026-10-01-p2-extremes-width.md` |
 | A4 | `[ ]` | **P2-4 全历史 PIT 成分 + 消除前视偏差**（2026-10-01 完成，待同步；**会再次改变行业聚合与冷区信号**） | `docs/changes-2026-10-01-p2-pit-members.md` |
-| A5 | `[ ]` | **修 `每日行业报告.command:97` 的 `--days 60`**（🔴 **P0-2 根因**，2026-10-03 新立） | 窗口 ≤ 上游延迟天数时，**「窗口式 upsert × 上游延迟补数 = 不可逆历史坏值」**（已实测：2026-07-01~07-13 的 `breadth` 全为 0）。**待拍板**：① 拉长/取消窗口（全量重算）② 上游延迟超阈值时拒写 ③ 增加「值异常」校验。详见 `docs/changes-2026-10-03-daily-full-breadth-anomaly.md` |
-| A6 | `[ ]` | **同步 2026-10-03 的三个改动文件** + 同源 A/B 已通过 | `scripts/industry_tracker.py`（A1.1 拥挤度 None）、`scripts/mainline_detector.py`（A2 的 D12/D13/D14）。详见 `docs/changes-2026-10-03-defect-fixes.md` |
+| A5 | 🔶 | **P0-2 防御：`--days 60` 窗口（🔴 根因，2026-10-03 新立）** | **决策（2026-10-03）＝先加拒写护栏、暂不动窗口参数、暂不重算历史。** ✅ **护栏已落地**（`scripts/build_industry_daily_full.py` 新增 `_preflight_guard()`：① 行情窗口 <33 天即拒 ② 窗口起点=行情最早日则豁免 ③ 逐日「`breadth` 为 0 或 NaN」占比中位数 ≥80% 即拒；`--force-overwrite` 全部跳过）。验证：单元 8/8 通过 + 真实 `--days 60` 产物 sha 与基线**逐行逐列一致**（零回归）+ 真实 `--days 10` 拒写 exit=1 + 真实数据根零写入。⏳ **仍待拍板**：是否改窗口（`--days 2000`）/ 引入数据版本探测。详见 `docs/changes-2026-10-03-daily-full-breadth-anomaly.md` §5 |
+| A6 | `[ ]` | **同步 2026-10-03 的缺陷修复（两个脚本）** + 同源 A/B 已通过 | `scripts/industry_tracker.py`（A1.1 拥挤度 None）、`scripts/mainline_detector.py`（A2 的 D12/D13/D14）。⚠️ **纯内部口径修正，不影响当日产物**（实测逐行逐列一致）⇒ 同步后**无需重算**。详见 `docs/changes-2026-10-03-defect-fixes.md` |
+| A7 | `[ ]` | **同步 2026-10-03 的护栏改动**（`scripts/build_industry_daily_full.py`） | ⚠️ **须与 A5 一起在源端落地** —— 护栏只在源端跑日更时才有意义（本机不跑日更）。落地后观察下次日更是否出现「写入前自检未通过」，可反向验证 P0-2 根因 |
 
 **A1 具体命令**
 ```bash
@@ -93,8 +94,8 @@ python3 scripts/evaluate_signals.py
 | C1 | `[ ]` | **补拉情绪数据**：`hsgt_top10` / `hk_hold` 的 2026-09-30 | 这正是当初阻断台账的那两个缺口（2×`SENTI_MISSING`） |
 | C2 | `[ ]` | 补拉 `signals/industry_margin_daily.parquet` 最新数据（现停在 2026-09-23） | 滞后收益面板 4 个交易日 |
 | C3 | ⏸ | 决定 `industry/mainline_state.json` 的去留 | **2026-10-03 复核：真孤儿** —— mtime 停在 **2026-07-26 18:12**（顶层键只有 `directions` / `last_update`），**仓库内零引用 + 数据根内零引用**，无脚本再生成。**建议删除**，但属产物去留，**待主人拍板**（选项：① 删 ② 补生成器 ③ 现状保留） |
-| C4 | ✅ | 历史缺数的追溯性检查 | `check_data_completeness.py` **只校验单个目标日**，历史任何一天缺数/坏值永远发现不了。**2026-10-03 已证明可定位**：用「台账里存的 signal `features` 对账当前重算值」这一技法，**成功定位到 D16 背后的真实静默坏值**（见 C5）。**是否把它内置成常规检测规则待拍板**（⚠️ 会改变日报退出码） |
-| C5 | `[ ]` | **重算 `daily_full` 的 2026-07-01~07-13 静默坏值段**（🔴 **P0-2**） | 该段 **131 个行业的 `breadth` 全为 0**（同期 `avg_pct`/`total_amount`/`n_stocks` 正常）。根因 = `每日行业报告.command:97` 的 **`--days 60`** 窗口 × upsert「窗口外历史原样保留」⇒ 窗口滚过即**永久固化**；叠加 `market/daily` 的 2026-05~09 直到 **09-23 22:52** 才回填。修法见 **A5**。详见 `docs/changes-2026-10-03-daily-full-breadth-anomaly.md` |
+| C4 | ⏸ | 历史缺数的追溯性检查 | `check_data_completeness.py` **只校验单个目标日**，历史任何一天缺数/坏值永远发现不了。**2026-10-03 已证明可定位**：用「台账里存的 signal `features` 对账当前重算值」这一技法，**成功定位到 D16 背后的真实静默坏值**（见 C5）。⏸ **决策（2026-10-03）：加「值异常」规则暂缓** —— 该规则**参与退出码**，可能让日报在健康日也报错，阈值口径未定。⚠️ 注意：A5 的写入护栏是**写入前**自检，**不参与退出码**，与本节互补、不是同一件事 |
+| C5 | 🔶 | **重算 `daily_full` 的 2026-07-01~07-13 静默坏值段**（🔴 **P0-2**） | 该段 **131 个行业的 `breadth` 与 `breadth_ma13` 精确为 `0.0`**（1179 行全 0；同期 `avg_pct`/`total_amount`/`n_stocks` 正常）。根因 = `每日行业报告.command:97` 的 **`--days 60`** 窗口 × upsert「窗口外历史原样保留」⇒ 窗口滚过即**永久固化**；叠加 `market/daily` 的 2026-05~09 直到 **09-23 22:52** 才回填。**决策（2026-10-03）：本轮不重算**（护栏优先，见 A5）。重算命令 = `build_industry_daily_full.py --days 2000 --force-overwrite`（全量 1636 天）。✅ 已排除：坏值**当前不可复现**（任何窗口重算都不出全 0）；同链路 `industry_weighted_returns` **未受影响**（全历史零退化，实测） |
 
 ---
 
@@ -140,3 +141,4 @@ python3 scripts/evaluate_signals.py
 | 2026-10-03 | **A1.1 修 `industry_tracker.py` 拥挤度 None 处理不对称**（D18 → 已修）—— 当日拥挤度缺失而前 5 日有值时 `crowd_vals.sort()` 抛 `TypeError`；修法 = 当日缺失即不做 w₄ 分量（中性回退 1.0）。**基线代码在同一沙箱精确复现该报错 ⇒ 既有缺陷，非本次引入**；改动后 `exit=0`。**同源 A/B 零回归** | 见 `docs/changes-2026-10-03-defect-fixes.md` |
 | 2026-10-03 | **A2 修 `mainline_detector.py` 三处口径缺陷**（D12 `heat_ratio` 前视 / D13 全样本相关矩阵 / D14 `od_ratio` 数据不足误判进攻型）。实测 **23 个群成员逐字相同，逻辑零回归**；仅 `heat_ratio` 有 ≤1 ulp 浮点尾数差异 | 见 `docs/changes-2026-10-03-defect-fixes.md` |
 | 2026-10-03 | **发现并定位 P0-2：`industry_daily_full` 静默历史坏值** —— 2026-07-01~07-13 连续 9 个交易日 131 个行业 `breadth` 全为 0。根因 = `--days 60` 窗口 × upsert「窗口外历史原样保留」× 上游 09-23 才回填行情。**由此一并解释 D16**（台账/重算差 30 条，差异 100% 集中在 2026-07~08）。新立 **A5 / C5** | 见 `docs/changes-2026-10-03-daily-full-breadth-anomaly.md` |
+| 2026-10-03 | **P0-2 写入护栏落地**（决策：先加护栏、暂不动窗口、暂不重算）—— `build_industry_daily_full.py` 新增 `_preflight_guard()`（预热天数 / 数据起点豁免 / 0-NaN 退化中位数三判据）。**单元 8/8 通过；真实 `--days 60` 产物 sha 与基线逐行逐列一致（零回归）；`--days 10` 拒写 exit=1；真实数据根零写入**。另实测：坏值**当前不可复现**、`weighted_returns` **不受影响**。新立 **A7** | 见 `docs/changes-2026-10-03-daily-full-breadth-anomaly.md` §4.5/§5.1 |

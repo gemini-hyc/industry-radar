@@ -39,6 +39,56 @@ from src.utils.provenance import save_dataframe
 OUT_PATH = INDUSTRY_DIR / "industry_daily_full.parquet"
 
 
+# ── 写入护栏（2026-10-03）──────────────────────────────────────────────
+# 背景：2026-07-01~07-13 连续 9 个交易日、131 个行业的 breadth 全为 0（同期
+# avg_pct / total_amount / n_stocks 正常）。根因 = 当时本次窗口不含 MA20 预热所需的
+# 先验历史 ⇒ ma20 未成型 ⇒ above_ma20 全为 False ⇒ breadth 落成 0；而 upsert 对
+# 「窗口外历史」原样保留，使该坏值在窗口滚过后被永久固化、不再重算。
+# 详见 docs/changes-2026-10-03-daily-full-breadth-anomaly.md
+#
+# 教训：窗口式 upsert × 上游延迟补数 = 不可逆历史坏值，且任何单日校验都发现不了。
+MIN_WARMUP_DAYS = 33          # breadth 依赖 MA20/MA13，预热需 ≥33 天（见模块 docstring）
+MAX_DEGENERATE_RATIO = 0.80   # 新窗口内「各交易日 breadth 为 0/NaN 占比」的【中位数】上限
+
+
+def _preflight_guard(daily: pd.DataFrame, mkt: pd.DataFrame,
+                     force_overwrite: bool) -> str:
+    """写入前自检。返回空串 = 通过；否则返回拒绝原因（非空即应拒写）。
+
+    判据（顺序即优先级）：
+      ① 预热充足性 —— 行情窗口天数 < MIN_WARMUP_DAYS 直接拒；
+      ② 数据起点豁免 —— 窗口从最早的行情日开始（全历史重建）时，MA 未成型属正常；
+      ③ 输出退化自检 —— 逐日算「breadth 为 0 或 NaN」的行业占比，取【中位数】与阈值比。
+         - 0   = 旧语义下 ma20 未成型（`close > NaN` → False）；
+         - NaN = 现语义下 `breadth_dropna=True` 把 ma20 未成型的个股排除出分母后、
+                 分母为空的结果。两者都表示「MA 没算出来」，必须一起抓。
+         用中位数而非均值/最大值：单日市场级跌停（如 2020-02-03 实测 56.5% 行业
+         宽度为 0）属真实行情，不应触发；而坏值场景是【每一天】都接近 100%。
+    """
+    if force_overwrite:
+        return ""      # --force-overwrite 用于全量重建，早期日期宽度低属正常
+
+    d_new = pd.to_datetime(daily["date"]).dt.normalize()
+    d_mkt = pd.to_datetime(mkt["date"]).dt.normalize()
+
+    n_days = int(d_mkt.nunique())
+    if n_days < MIN_WARMUP_DAYS:
+        return (f"行情窗口仅 {n_days} 个交易日 < MA20/MA13 预热所需的 "
+                f"{MIN_WARMUP_DAYS} 天，breadth 必然退化")
+
+    if d_new.min() <= d_mkt.min():
+        return ""      # 窗口起点即数据起点 ⇒ 全历史重建，豁免
+
+    degenerate = ((daily["breadth"] == 0) | daily["breadth"].isna()).to_numpy()
+    per_day = (pd.DataFrame({"date": d_new, "bad": degenerate})
+               .groupby("date")["bad"].mean())
+    med = float(per_day.median())
+    if med >= MAX_DEGENERATE_RATIO:
+        return (f"本次结果中 breadth 为 0/NaN 的行业占比，逐日中位数为 {med:.1%}"
+                f"（上限 {MAX_DEGENERATE_RATIO:.0%}）—— 疑似 MA 未成型导致宽度整体退化")
+    return ""
+
+
 def main(days: int = 2000, force_overwrite: bool = False,
          allow_static_fallback: bool = False):
     print("[1/3] 加载行业成员映射...")
@@ -81,6 +131,17 @@ def main(days: int = 2000, force_overwrite: bool = False,
     )
     if daily.empty:
         print("❌ 聚合结果为空")
+        return 1
+
+    # ── 写入护栏（2026-10-03）：窗口内输入不足即拒写 ──
+    # 不检查的结果会被 upsert 固化进历史，且窗口滚过后不再重算（不可逆）。
+    reason = _preflight_guard(daily, mkt, force_overwrite)
+    if reason:
+        print(f"❌ 写入前自检未通过：{reason}")
+        print("   已拒绝写入 —— 否则该退化结果会被 upsert 固化进历史、窗口滚过后不再重算。")
+        print("   排查顺序：① 该段日期在 market/daily 里是否缺文件 / 文件内容不全"
+              "（上游回填晚于本脚本）；② --days 是否过小（需 ≥33）；"
+              "③ 确属全量重建时改用 --force-overwrite。")
         return 1
 
     # ── 按日期 upsert（不可整文件覆盖：日更只算近 --days 天，覆盖写会截断历史）──
