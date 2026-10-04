@@ -70,6 +70,28 @@ scripts/build_members_daily.py  ← 日更：按交易日历展开每日快照
 - 两个入口脚本的解释器来源：`每日行业报告.command` 用 `${PYTHON:-python3}`（可用 `PYTHON=` 覆盖）；
   `scripts/run_daily_scheduled.sh` **硬编码 `/usr/bin/python3`**（源端专用，**本机不要照跑**）。
 
+## 开发与验证（`make`）
+
+**改完代码提交前跑一条命令即可**：
+
+```bash
+make check      # = 语法检查 + 回归基线（结构硬断言 + 数值快照软报告）
+make help       # 列出全部目标
+```
+
+| 目标 | 作用 | 何时用 |
+|---|---|---|
+| `make check` | **提交前跑这条** | 每次改代码后 |
+| `make verify SCRIPT=scripts/xxx.py` | **同源 A/B**：`git archive HEAD` 基线 vs 改动后，同一份沙箱数据双跑并逐产物比对 ⇒ 回答「**改动 diff 是什么**」 | 改了会动产物的脚本 |
+| `make selftest` | 注入破坏，验证每条断言**真能抓到**（11+3 例） | 改了测试之后 |
+| `make snapshot` | 更新数值快照基线 | **仅改产物口径后** |
+| `make syntax` | 只做语法检查（AST 解析，**零副作用、不写 `__pycache__`**） | 快速自查 |
+| `make clean-verify` | 清理 A/B 沙箱（4.5 G，可随时重建） | 磁盘紧张时 |
+
+- 换机器用 `make check PY=/path/to/python` 覆盖解释器（不要改 `Makefile` 里的默认值）。
+- ⚠️ **`make check` 目前会红 1 项**（`mainline_detection` 列集合）：B1 改了产物口径但真实数据根的
+  产物还是旧的 12 列，重算后即转绿 —— 红是真信号，不要当成误报绕过。
+
 ## 数据与配置
 
 - **单一配置源**：`config/config.yaml`，可用环境变量 `INDUSTRY_RADAR_DATA` 覆盖数据根目录，默认 `/Users/hyc/quant-data`
