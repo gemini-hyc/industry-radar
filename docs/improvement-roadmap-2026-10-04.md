@@ -17,7 +17,7 @@
 | **自动化测试** | **0**（无 `tests/`、无 pytest 配置） | 每次改动都靠**手工沙箱 A/B** 撑着 —— 这是最大的结构性短板 |
 | **CI** | **0**（无 `.github/`） | 无任何自动化把关 |
 | 配置层 | `config/config.yaml` 仅 **3 个键** | 而 `industry_tracker.py` 有 **24 个模块级手工常量 + ≈57 个函数内分档字面量**（B5） |
-| 环境声明 | `requirements.txt` 写「解释器 `/usr/bin/python3`」 | **与本机实际不符**（该系统 python 没有 pandas，真实解释器在 `stock-doctor/.venv`） |
+| 环境声明 | `requirements.txt` 写「解释器 `/usr/bin/python3`」 | **与本机实际不符**（该系统 python 没有 pandas，真实解释器在 `stock-doctor/.venv`）—— **2026-10-04 已纠偏（A3）** |
 | 模块边界 | `src/` = 库、`scripts/` = 入口 | 但 `scripts/` 里混着业务逻辑（如 `industry_tracker.py` 996 行既是入口又是引擎） |
 | 文档—代码漂移 | 审计 P10 已修一批（2026-10-01） | 但 `docs/` 已有 **25+ 篇**，口径变更靠人工同步，无机制保障 |
 
@@ -58,7 +58,7 @@
 |:--:|---|---|---|:--:|
 | **A1** | **开发验证基座**：把「建沙箱 → 基线/改动双跑 → 逐产物 sha 比对 → 真实数据根守卫」固化成一条命令 | `tools/dev_verify.sh` | 一条命令跑完，输出「零回归 / N 处差异」结论；零输出守卫 | ✅ **已完成** |
 | **A2** | **回归基线测试**：把 `system-audit §6 数值基线` 固化成可跑断言 | `tests/`（6 文件，**零新增依赖**） | 对当前副本跑全绿；故意改坏一处能红 | ✅ **已完成** |
-| **A3** | **环境声明纠偏**：`requirements.txt` / README 写清**真实解释器**与依赖版本（本机 `stock-doctor/.venv`） | 改正的两个文件 | 新机器照 README 一次装好 | ⏳ 待做 |
+| **A3** | **环境声明纠偏**：`requirements.txt` / README 写清**真实解释器**与依赖版本（本机 `stock-doctor/.venv`） | 改正的两个文件 | 新机器照 README 一次装好 | ✅ **已完成** |
 | **A4** | **轻量 CI（可选，本地）**：`make check` = 语法检查 + 基线测试 | `Makefile` | 提交前一条命令 | ⏳ 待做 |
 
 > ⚠️ **A2 的前提**：本机数据是**只读副本**，基线会随源端同步而变 ⇒ 测试要区分
@@ -96,6 +96,36 @@
   遂改为**条件化断言**（负值允许，但出现在普涨日则红）。**教训：值域约束不能凭语义猜。**
 - **修掉一个假绿**：`unittest.main(exit=False)` **退出码恒为 0** ⇒ 脚本化调用会拿到假绿，
   已改为显式 `sys.exit(wasSuccessful())`。
+
+### ✅ A3 完成记录（2026-10-04）
+
+**改了什么**（两个文件，纯文档，零代码改动）：
+
+| 文件 | 改动 |
+|---|---|
+| `requirements.txt` | 头注释重写：写清**源端 / 本机 / 新机器**三种解释器情形 + 本机实测版本 + 缺失依赖；`scipy` / `futu-api` 移到「非全环节需要」组并注明**真实命中位置** |
+| `README.md` | 新增 `## 环境与依赖` 段（解释器对照表 + 版本 + 缺失依赖处理 + 两个入口脚本的解释器来源） |
+
+**事实核查（实测，非照抄文档）**：
+
+| 项 | 实测结果 |
+|---|---|
+| 源端解释器 | `/usr/bin/python3`（系统 Python 3.9.6），依赖装在系统解释器里 —— **据 `system-audit` 记载，本机无法复核** |
+| 本机 `/usr/bin/python3` | **`ModuleNotFoundError: No module named 'pandas'`** ⇒ 原声明在本机确实不成立 |
+| 本机真实解释器 | `/Users/hyc/Quant/stock-doctor/.venv/bin/python`（Python **3.9.6**；pandas 2.3.3 / numpy 2.0.2 / pyarrow 21.0.0 / PyYAML 6.0.3） |
+| 本机缺 | `scipy`、`futu-api` |
+| 新发现的坑 | 本机 shell 里裸 `python3` 可能解析到**另一个恰好装了 pandas 的解释器**（实测 pandas **3.0.5**、且**无 pyarrow/PyYAML**）⇒ 版本不同，**数值结果可能不同**。已在 README 写明「必须用绝对路径解释器」 |
+
+**`scipy` / `futu` 的真实用途（顺带查清，此前记载含糊）**：
+
+- `scipy`：生产链**仅** `scripts/update_industry_factor.py:107`（懒加载 `from scipy import stats`）；`research/` 下另有 12 处。
+- `futu`：`scripts/pull_futu_industry.py`（3 处）+ `scripts/sync_industries_to_futu.py`（2 处），**均为函数内懒加载** ⇒ 缺它不影响主链路启动。
+
+**核查过程中踩到一个新陷阱**（已记入 `MEMORY.md` §1 与技能 §8）：
+
+> **macOS BSD grep 的 `\s` 不是空白字符，等同字面 `s`。** 用 `grep -E "^\s*from scipy"` 搜缩进的 import
+> 会**静默返回空**，直接得出「这个包没被用到」的反向结论。本次因此把 `scipy` / `futu` 双双误判为"未使用"。
+> **一律写 `[[:space:]]`**；且**别拿无缩进的样本自证**（那种情况会假通过）。
 
 ---
 

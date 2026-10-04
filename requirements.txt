@@ -1,9 +1,24 @@
-# Industry Radar 依赖（解释器：系统 python3，/usr/bin/python3）
+# Industry Radar 依赖
+#
+# ⚠️ 解释器：各机器不一样，别照抄（2026-10-04 纠偏）
+#   · 源端 Mac Studio：系统解释器 /usr/bin/python3（Python 3.9.6），依赖就装在系统解释器里，
+#                      日更链跑的是它。【据 docs/system-audit-and-roadmap.md 记载，本机无法复核】
+#   · 本机 MacBook（从机）：借用 /Users/hyc/Quant/stock-doctor/.venv/bin/python
+#                      ⚠️ 本机 /usr/bin/python3 【没有 pandas】（2026-10-04 实测），别用它。
+#   · 新机器：自建 venv 装本文件，别指望系统 python3 自带。
+#
+# 本行历史版本写的是「解释器：系统 python3，/usr/bin/python3」——那只对源端成立，已纠偏。
+#
+# 本机实测版本（2026-10-04，stock-doctor/.venv，Python 3.9.6）：
+#   pandas 2.3.3 / numpy 2.0.2 / pyarrow 21.0.0 / PyYAML 6.0.3
+#   ⚠️ 缺 scipy、缺 futu-api —— 只在个别环节用到，本机只做只读验证时不需要；
+#      确实要装请先问，别擅自改环境。
+
 pandas>=2.0
 numpy
-scipy
 pyarrow
 pyyaml   # config/config.yaml 解析（src/paths.py，缺失时静默回退默认路径）
 
-# 仅行业成员拉取 / 富途分组同步需要（其余环节可不装）
-futu-api
+# 以下两个不是所有环节都需要（两者都是「用到时才 import」的懒加载，缺了不影响主链路启动）
+scipy      # 仅 scripts/update_industry_factor.py:107（拥挤度秩相关）与 research/ 回测脚本用到
+futu-api   # 仅 scripts/pull_futu_industry.py、scripts/sync_industries_to_futu.py（富途 OpenD）用到
