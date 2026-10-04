@@ -167,31 +167,80 @@ def compute_group_signals(returns, idf, name_map, groups, corr_matrix,
     return group_signals
 
 
-def detect_mainline(group_signals, date, 
-                    heat_threshold=1.3, excess_threshold=0.3, winrate_threshold=0.6):
+def _raw_is_mainline(row, heat_threshold, excess_threshold, winrate_threshold):
+    """单日三条件判定（不含任何跨日约束）—— 连续性过滤的基元。
+
+    抽成独立函数，是为了让「单日是否主线」与「历史上某天是否主线」用**同一把尺子**；
+    否则历史日的判定口径会与当日漂移，连续性过滤就失去意义。
     """
-    检测指定日期是否存在主线
+    return bool(
+        row.get('heat_ratio', 0) >= heat_threshold
+        and row.get('excess_ma20', 0) >= excess_threshold
+        and row.get('excess_winrate', 0) >= winrate_threshold
+    )
+
+
+def detect_mainline(group_signals, date,
+                    heat_threshold=1.3, excess_threshold=0.3, winrate_threshold=0.6,
+                    min_consecutive_days=3):
+    """
+    检测指定日期是否存在主线。
+
+    ⚠️ 跨期稳定性约束（B1 / D2，2026-10-04 上线）：主线须**连续 >= min_consecutive_days 个交易日**
+       满足三条件才成立。改动前无任何跨日约束，实测 **30.3% 的主线段只活 1 天**（单日孤噪）。
+
+    🔑 **无前视**：判定 T 日只需 T 与其前 N-1 个交易日（均已发生），不触碰 T 之后的数据
+       ⇒ 可直接进日更链路，无需等整段结束才敢确认。
+       代价：每段**头 2 天不算主线**（与「回放后段内全保留」口径差 2 天/段，
+       验收数字必须按本口径重算，不要沿用旧表）。
+
+    回滚：传 `min_consecutive_days=1` 即完全恢复原行为。
+    `is_mainline_raw` 永久保留纯三条件结果，供诊断与台账核对。
     """
     results = []
-    
+
     for gid, gs in group_signals.items():
-        d = gs['data']
-        row = d[d['date'] == date]
-        
-        if len(row) == 0:
+        d = gs['data'].reset_index(drop=True)
+        locs = d.index[d['date'] == date]
+
+        if len(locs) == 0:
             continue
-        row = row.iloc[0]
-        
+        loc = locs[0]
+        row = d.iloc[loc]
+
         heat = row.get('heat_ratio', 0)
         excess_ma20 = row.get('excess_ma20', 0)
         winrate = row.get('excess_winrate', 0)
         amt_ma20 = row.get('amt_ma20', 0)
-        
-        # 判断是否为主线
-        is_mainline = (heat >= heat_threshold and 
-                       excess_ma20 >= excess_threshold and 
-                       winrate >= winrate_threshold)
-        
+
+        # 单日判定（三条件，与改动前逐字一致）
+        is_mainline_raw = _raw_is_mainline(
+            row, heat_threshold, excess_threshold, winrate_threshold)
+
+        # 跨期稳定性：以当日结尾的连续主线天数
+        consec_ok, consec_days = False, 0
+        if min_consecutive_days <= 1:
+            consec_ok = is_mainline_raw
+            consec_days = 1 if is_mainline_raw else 0
+        else:
+            lo = loc - (min_consecutive_days - 1)
+            if lo >= 0:
+                flags = [_raw_is_mainline(r, heat_threshold, excess_threshold, winrate_threshold)
+                         for _, r in d.iloc[lo: loc + 1].iterrows()]
+                consec_ok = all(flags)
+                for f in reversed(flags):          # 末尾连续天数
+                    if not f:
+                        break
+                    consec_days += 1
+            else:
+                # 历史不足 N 个交易日 ⇒ 无法确认连续，一律不算主线（但记录已有天数）
+                for _, r in d.iloc[0: loc + 1].iterrows():
+                    if not _raw_is_mainline(r, heat_threshold, excess_threshold, winrate_threshold):
+                        break
+                    consec_days += 1
+
+        is_mainline = is_mainline_raw and consec_ok
+
         # 判断发展阶段
         if heat >= 1.7:
             if excess_ma20 > 0:
@@ -250,6 +299,10 @@ def detect_mainline(group_signals, date,
             'amt_ma20': amt_ma20,
             'hist_mean_amt': float(row.get('hist_mean_amt', 0)),
             'is_mainline': is_mainline,
+            # —— B1/D2 新增：可审计字段（下游只读 is_mainline，这几列供诊断）——
+            'is_mainline_raw': is_mainline_raw,      # 仅三条件，未过连续性门槛
+            'consec_days': consec_days,             # 以当日结尾的连续主线天数
+            'min_consecutive_days': min_consecutive_days,  # 生效阈值（产物自解释）
             'stage': stage,
             'style': style,
             'od_ratio': od_ratio,
@@ -336,8 +389,9 @@ def run_full_detection(reference_date=None):
     print("行业聚类...")
     groups, corr_matrix = cluster_industries(pivot, corr_threshold=0.6)
     
-    # 所有群都参与计算：当前【无】最小成员数约束，也无跨期稳定性约束，
-    # 因此会出现"1 个行业的方向群被判定为主线"。是否加约束见 docs/action-items.md D2。
+    # 所有群都参与计算：**仍无**最小成员数约束（D2 的另一半 —— 2026-10-04 主人只拍板了
+    # 跨期稳定性那一半），因此仍会出现"1 个行业的方向群被判定为主线"；
+    # 跨期稳定性约束已在 detect_mainline 内落地（min_consecutive_days=3）。
     valid_groups = groups
 
     print(f"聚类结果: {len(groups)}个群，全部参与计算（当前无最小成员数约束）")
@@ -358,7 +412,10 @@ def run_full_detection(reference_date=None):
     
     mainlines = results[results['is_mainline']]
     non_mainlines = results[~results['is_mainline']]
-    
+
+    _mc = int(results['min_consecutive_days'].iloc[0]) if len(results) else 0
+    print(f"\n主线口径：三条件 AND 连续 >= {_mc} 个交易日（B1/D2 跨期稳定性约束）")
+
     if len(mainlines) > 0:
         print(f"\n✅ 检测到{len(mainlines)}个主线方向：\n")
         for _, r in mainlines.iterrows():
@@ -366,8 +423,16 @@ def run_full_detection(reference_date=None):
             print(f"    热度={r['heat_ratio']:.1f}x均值, 超额={r['excess_ma20']:.3f}%/日, 胜率={r['winrate']:.0%}")
             print(f"    阶段={r['stage']}, 类型={r['style']}(进攻/防御={r['od_ratio']:.1f})")
             print(f"    成交额占比={r['amt_ma20']:.1f}%(历史均值{r['hist_mean_amt']:.1f}%)")
+            print(f"    连续主线={int(r['consec_days'])} 天")
     else:
         print("\n❌ 当前无主线，市场处于轮动状态")
+
+    # B1 诊断：单日三条件成立、但被连续性门槛挡下的方向群（改动前会被误判为「主线」）
+    blocked = results[results['is_mainline_raw'] & ~results['is_mainline']]
+    if len(blocked) > 0:
+        print(f"\n⚠️ 有 {len(blocked)} 个方向群单日达标但连续性不足（未计为主线）：")
+        for _, r in blocked.iterrows():
+            print(f"    群{r['group_id']}({r['n_industries']}行业): 连续仅 {int(r['consec_days'])}/{_mc} 天")
     
     # 输出热度排名Top10
     print(f"\n热度排名Top10：\n")

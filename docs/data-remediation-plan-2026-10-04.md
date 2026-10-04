@@ -85,8 +85,16 @@ wc -l ~/Quant/industry-radar/scripts/*.py
 | **A6** 缺陷修复 | `scripts/industry_tracker.py`、`scripts/mainline_detector.py` | `changes-2026-10-03-defect-fixes.md` | **否**（纯内部口径，实测逐行逐列一致） |
 | **A7** 写入护栏 | `scripts/build_industry_daily_full.py` | `changes-2026-10-03-daily-full-breadth-anomaly.md` | 否 |
 | **P0-3** 数据源修正 | `src/daily_review/module_02_industry.py`（见 §9.1） | 本文 §9.1 | 否（改的是取数路径） |
+| **A8** mainline 跨期稳定性 | `scripts/mainline_detector.py` | `improvement-roadmap-2026-10-04.md` §B1 完成记录 | **是** —— 改判定口径，**日报与信号内容都会变** |
 
 > ⚠️ **A3 与 A4 共用 `src/utils/market_data.py`，必须合并成一次同步** —— 分两次会产生版本不一致的中间态。
+
+> 🔴 **A8（2026-10-04 新增）同步纪律**：`mainline_detection.csv` 的**列集合已变**（新增
+> `is_mainline_raw` / `consec_days` / `min_consecutive_days`）。同步后若**只改代码不重跑**，
+> 产物会停留在旧 12 列 ⇒ 变成"代码新 / 产物旧"的漂移态。
+> **必须：同步 A8 代码 → 重跑 `mainline_detector.py` → 再跑报告与台账。**
+> 判据：产物列数应为 **15**（原 12 + 新 3）。
+
 
 **同步方式**（三选一，建议固化下来）：
 

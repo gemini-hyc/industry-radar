@@ -74,6 +74,8 @@ EXPECTED_COLUMNS: dict[str, list[str]] = {
     "mainline_detection": [
         "group_id", "group_names", "n_industries", "heat_ratio", "excess_ma20",
         "winrate", "amt_ma20", "hist_mean_amt", "is_mainline", "stage", "style", "od_ratio",
+        # B1/D2（2026-10-04 跨期稳定性约束）新增 —— 改 mainline 口径时连同这三列一起维护
+        "is_mainline_raw", "consec_days", "min_consecutive_days",
     ],
     "tracker_report": [
         "code", "name", "status", "phase", "signal_date", "S0", "score",
