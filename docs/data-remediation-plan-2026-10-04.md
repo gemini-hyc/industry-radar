@@ -19,6 +19,7 @@
 | **B7** regime 代码 8 类 vs 落盘 5 类 | 代码 `d3b024a` 提交于 **10-01 18:05**，产物 mtime **09-30 19:30** ⇒ **待重算**，源端下次日更自愈（前提：源端已同步该 commit） | ❌ 不阻塞 |
 | **B2** 静态 5644 vs PIT 5913 差 269 只 | 归一化后仅 427 只真差异；**对产物几乎零影响**（仅静态 79 只行情命中 0/79；仅 PIT 348 只中 341 只无行情） | ❌ 不阻塞 |
 | **B3** 宽度 `min_periods` 5→20 | 真实代价 **仅 26 条信号（1.2%）**，非报告的 230 条 | ❌ 不阻塞 |
+| **B1/A8** mainline 跨期稳定性 | 代码已改、**本机产物已重算（15 列）**；源端同步后重跑即可。有主线日 873→677，**日报内容会变**（变少） | ❌ 不阻塞 |
 
 > ⚠️ **但以上都只是「不阻塞」，不是「已解决」** —— 它们全部需要源端动手，即本文内容。
 
@@ -34,13 +35,14 @@
 | 步 | 内容 | 预估 | 是否阻塞后续 |
 |:--:|---|---|:--:|
 | 0 | **到达源端先取证**（版本 / 调度 / 依赖），**不动手** | 30 min | ✅ 是 |
-| 1 | **代码同步**：本机 → 源端（A1~A7 + P0-3 改动） | 1 h | ✅ 是 |
-| 2 | **数据重算**：成分 → 加权 → 聚合 → regime → nav → 台账 → 评估 | 2~4 h | ✅ 是 |
-| 3 | **基础设施固化**：版本基线 / 同步通道 / 路径大小写 / 依赖记录 | 1 h | ❌ 否 |
-| 4 | **数据治理**：孤儿产物 / 追溯校验 / 补拉 / 未登记写入 / 大文件 | 2 h | ❌ 否 |
-| 5 | **僵尸调度处置**（session2 的 7 步） | 1~2 h | ❌ 否 |
-| 6 | **凭据轮换**（token 已止血，待替换） | 1 h | ❌ 否 |
-| 7 | **阶段 B 口径议题**（按 §9 的处置结论） | 视选择 | ❌ 否 |
+| 1 | **代码同步**：本机 → 源端（A1~A10 + P0-3 改动，共 17 个文件） | 1 h | ✅ 是 |
+| 2 | **数据重算**：成分 → 加权 → 聚合 → **mainline** → regime → nav → 台账 → 评估 | 2~4 h | ✅ 是 |
+| 3 | **回归自检**：`make check`（**同步了 A10 才跑**，见 §3.3） | 5 min | ❌ 否 |
+| 4 | 基础设施固化：版本基线 / 同步通道 / 路径大小写 / 依赖记录 | 1 h | ❌ 否 |
+| 5 | 数据治理：孤儿产物 / 追溯校验 / 补拉 / 未登记写入 / 大文件 | 2 h | ❌ 否 |
+| 6 | 僵尸调度处置（session2 的 7 步） | 1~2 h | ❌ 否 |
+| 7 | 凭据轮换（token 已止血，待替换） | 1 h | ❌ 否 |
+| 8 | 阶段 B 口径议题（按 §9 的处置结论） | 视选择 | ❌ 否 |
 
 ---
 
@@ -50,7 +52,7 @@
 
 ```bash
 cd ~/Quant/industry-radar          # ⚠️ 大写 Q；源端若有小写副本需确认哪个在跑
-git log --oneline -3                # 记录 HEAD，与本机 6a0df65 比对
+git log --oneline -3                # 记录 HEAD，与本机 dc4513b 比对
 git status --short                  # 记录未提交改动（源端可能有本机没有的手工修改！）
 md5 ~/Quant/industry-radar/scripts/industry_tracker.py
 wc -l ~/Quant/industry-radar/scripts/*.py
@@ -74,7 +76,7 @@ wc -l ~/Quant/industry-radar/scripts/*.py
 
 > 🔴 **前提**：`~/.quant-sync` **只同步数据、不含代码**（action-items **B2**）⇒ **本机任何改动都不会自动到源端**，必须手工同步。
 
-**需要同步的文件**（本机 HEAD `6a0df65`，按主题分组）：
+**需要同步的文件**（本机 HEAD **`dc4513b`**，按主题分组）：
 
 | 组 | 文件 | 来源文档 | 同步后是否需重算 |
 |---|---|---|---|
@@ -85,17 +87,54 @@ wc -l ~/Quant/industry-radar/scripts/*.py
 | **A6** 缺陷修复 | `scripts/industry_tracker.py`、`scripts/mainline_detector.py` | `changes-2026-10-03-defect-fixes.md` | **否**（纯内部口径，实测逐行逐列一致） |
 | **A7** 写入护栏 | `scripts/build_industry_daily_full.py` | `changes-2026-10-03-daily-full-breadth-anomaly.md` | 否 |
 | **P0-3** 数据源修正 | `src/daily_review/module_02_industry.py`（见 §9.1） | 本文 §9.1 | 否（改的是取数路径） |
-| **A8** mainline 跨期稳定性 | `scripts/mainline_detector.py` | `improvement-roadmap-2026-10-04.md` §B1 完成记录 | **是** —— 改判定口径，**日报与信号内容都会变** |
+| **A8** mainline 跨期稳定性 | `scripts/mainline_detector.py` | 本文 §3.1 | **是** —— 改判定口径，**日报与信号内容都会变** |
+| **A9** 环境声明纠偏<br>（2026-10-04 新增） | `requirements.txt`、`README.md` | 本文 §3.2 | **否**（纯文档，但**有实操价值**） |
+| **A10** 回归基线 + 轻量 CI<br>（2026-10-04 新增） | `tests/`（7 文件）、`tools/syntax_check.py`、`Makefile` | 本文 §3.3 | **否**（不参与生产链路） |
 
 > ⚠️ **A3 与 A4 共用 `src/utils/market_data.py`，必须合并成一次同步** —— 分两次会产生版本不一致的中间态。
+> ⚠️ **A6 与 A8 都改 `scripts/mainline_detector.py`** —— 同上理由，合并成一次。
 
-> 🔴 **A8（2026-10-04 新增）同步纪律**：`mainline_detection.csv` 的**列集合已变**（新增
-> `is_mainline_raw` / `consec_days` / `min_consecutive_days`）。同步后若**只改代码不重跑**，
-> 产物会停留在旧 12 列 ⇒ 变成"代码新 / 产物旧"的漂移态。
-> **必须：同步 A8 代码 → 重跑 `mainline_detector.py` → 再跑报告与台账。**
-> 判据：产物列数应为 **15**（原 12 + 新 3）。
+> 📌 **最省事的同步方式**：本机与源端都是 git 仓库 ⇒ 直接
+> `git log --oneline 6a0df65..dc4513b` 拿到这 5 个提交，
+> `git diff --name-only 6a0df65..dc4513b` 拿到 **17 个文件**的完整清单（本表即按此核对）。
+> 若源端 HEAD 已在 `6a0df65` 之后，则**以源端实际 HEAD 为基准重算这个区间**（第 0 步已让你记录）。
 
+### 3.1 🔴 A8 同步纪律（改判定口径，最容易漏）
 
+`mainline_detection.csv` 的**列集合已变**（新增 `is_mainline_raw` / `consec_days` / `min_consecutive_days`）。
+
+- **必须**：同步 A8 代码 → 重跑 `mainline_detector.py` → 再跑报告与台账。
+- **判据：产物列数应为 15**（原 12 + 新 3）。
+- ✅ **本机已重算完毕**（`INDUSTRY_RADAR_READONLY=off` 跑 `mainline_detector.py`），实测 15 列
+  ⇒ **源端同步后只需重跑，无口径漂移风险**。本机 12 列旧版留档在 `~/quant-data/_local_dev/backups/`
+  （源端不需备份 —— 产物会被覆盖重算）。
+- 🔴 **日报与信号内容会变**：有主线日 **873 → 677（保留 77.5%）** ⇒ 按铁律④**必须重跑一次台账评估**。
+- ⚠️ 旧文档可能写「连续 ≥3 天保住 **93.1%** 主线日」—— **那是错的**（见 §9.6），**以 77.5% 为准**。
+
+### 3.2 ✅ A9 环境声明（纯文档，但有实操价值）
+
+`requirements.txt` 头注释已写明 **源端 / 本机 / 新机器三种解释器情形**。
+源端执行时请**顺手核对第 0 步取证第 4 项**（`python3 -V` + `pip freeze`）与该声明是否一致，不一致就改文档。
+本机已实测：`/usr/bin/python3` **没有 pandas**；真实解释器在 `stock-doctor/.venv`（Python 3.9.6 / pandas 2.3.3）。
+⚠️ 若源端确实用系统 `python3` 且它有依赖，请在 README 注明**「此为源端专用」**，避免他人照搬。
+
+### 3.3 ✅ A10 测试与 CI（**强烈建议同步**）
+
+本机已建 `tests/`（19 项结构断言）+ `make check`（语法 + 回归基线一条命令），**零新增依赖**。
+
+**为什么源端也要有**：源端是数据权威，**重算后唯一能判断「这次重算有没有搞坏结构」的工具就在这里**：
+
+```bash
+cd ~/Quant/industry-radar
+make check PY=$(which python3)      # 期望：19/19 全绿 + 0 WARN，退出码 0
+```
+
+⚠️ **测试分两层，别改坏**：**结构**（代码决定）硬断言进退出码 ｜ **数值**（数据决定）只报告。
+若把数值写成硬断言，源端每多跑一次日更测试就红一次 —— **那种红没有信息量，只会训练人忽略测试**。
+⚠️ 数值基线是**本机副本**的（`tests/baseline_snapshot.json`），源端首跑会报数值差异 —— **属预期**（源端数据更新），
+**只关注结构层是否全绿**。
+⚠️ 改产物口径时**必须同步 `tests/_common.py`**（期望 schema 写在那里），否则假回归会被 `--update` 无脑刷掉
+= 悄悄关掉了测试。
 **同步方式**（三选一，建议固化下来）：
 
 ```bash
@@ -146,7 +185,10 @@ print(f'已剔除 {n} 条旧 cold_zone 记录')
 "
 python3 scripts/build_signals_log.py --backfill-cold-zone --no-snapshot
 
-# ⑦ 评估（regime 分组由 5 类变 8 类）
+# ⑦ mainline 跨期稳定性（A8 新增，**漏了它 = 产物停在旧 12 列**）
+python3 scripts/mainline_detector.py
+
+# ⑧ 评估（regime 分组由 5 类变 8 类）
 python3 scripts/evaluate_signals.py
 ```
 
@@ -157,10 +199,14 @@ python3 scripts/evaluate_signals.py
 | `industry_members_daily.parquet` | **8,417,497 行 / 1636 天** |
 | `daily_full` 在 `2026-07-01~07-13` 的 `breadth` | **不再全 0**（至少部分行业非 0） |
 | `daily_regime.parquet` 类别数 | **8 类**（含「结构性 / 偏强结构性 / 边缘结构性」） |
+| `mainline_detection.csv` **列数** | **15 列**（原 12 + `is_mainline_raw` / `consec_days` / `min_consecutive_days`） |
 | 台账 `cold_zone` 条数 | 与重算一致（原 2234 / 本机复算 2204，重算后会变，**以源端实跑为准**） |
 | `evaluate_signals.py` 退出码 | 0 |
+| `make check`（若已同步 A10） | **19/19 结构断言全绿**（数值差异属预期，见 §3.3） |
 
 > ⚠️ **护栏要不要临时摘掉**：`--force-overwrite` 已跳过，无需摘。但**重算完记得恢复日更默认参数**（见 §9.3）。
+> ⚠️ **⑦ 的位置很关键**：必须在 ⑧ 之前 —— 台账与报告都读 `mainline_detection.csv` 的 `is_mainline`。
+> 漏跑 ⑦ ⇒ 产物停在旧 12 列（**代码新 / 产物旧的漂移态**），且 `make check` 会因列集合不符而红。
 
 ---
 
@@ -174,8 +220,10 @@ python3 scripts/evaluate_signals.py
 | **B4** | 路径大小写：`~/quant/industry-radar` → `~/Quant/industry-radar` | `grep -rn "quant/industry-radar"` 无残留 |
 | **B5** | 记录源端 `python3 -V` + `pip freeze`，写进 README 或 `requirements.txt` | 与环境实际一致 |
 
-> ⚠️ **B5 已发现问题**：本仓 `requirements.txt` 写「解释器：系统 python3，`/usr/bin/python3`」，
-> 但**本机 `/usr/bin/python3` 没有 pandas**（实际解释器在 `stock-doctor/.venv`）。源端实际用哪个必须记清。
+> ✅ **B5 已部分完成**（2026-10-04 A9）：`requirements.txt` 头注释已写明**源端 / 本机 / 新机器三种解释器情形**。
+> 源端只需**核对并按实情微调**（见 §3.2）。
+> ⚠️ 本机已实测：`/usr/bin/python3` **没有 pandas**；真实解释器在 `stock-doctor/.venv`。
+> ⚠️ **另有一处 README 内部矛盾待源端确认**：`:58` 说上游数据 **16:16** 更新、`:76` 说 **18:30** 才开始拉 —— 属调度口径。
 
 ---
 
@@ -268,11 +316,27 @@ python3 scripts/evaluate_signals.py
 
 | 议题 | 结论 |
 |---|---|
-| **B1 / D10** tracker 切 PIT | 等 9.1 处置后做；`module_02` 部分随 9.1 消失 |
+| **B1 / D10** tracker 切 PIT | 等 9.1 处置后做；`module_02` 部分随 9.1 消失。🔑 **结构性结论**：`sources.py:173 cold_zone_history` 读的是 `daily_full`、**不经过 tracker** ⇒ **tracker 切 PIT 对冷区信号零影响**；真实影响面 = tracker 自身产物 + 台账 `tracker_pool`（21 条）+ 富途同步 |
 | **B2 / D11** 成分对账 | **不改**（当下零影响）。若治，最小动作 = 修 `build_members_daily.py:63` 的 `out_date` **空串未归一化**（一行） |
-| **B4 / D2** mainline 约束 | **本机侧改进，见 `docs/improvement-roadmap-2026-10-04.md`** |
-| **B5 / D3** 常量外置 | **本机侧改进，同上** |
+| **B4 / D2** mainline 约束 | ✅ **已部分落地（`6f8bd6b`）** = 只上「连续 ≥3 天」。⏸ **成员数约束主人明确暂缓** —— 治独舞需另加「成员 ≥2」，代价是主线日 873→约 370 |
+| **B5 / D3** 常量外置 | **本机侧改进**，见 `docs/improvement-roadmap-2026-10-04.md`。只做「外置」不做「重新拟合」（拟合已被证伪） |
 | **D15** `find_ambush_candidates` 去留 | 现状即选项 ③（保留 + docstring 标注），零调用不会误导；**删不删待定** |
+
+### 9.6 ⚠️ 数字纠错：「连续 ≥3 天保住 93.1% 主线日」是**错的**
+
+旧路线图曾写这个数，**B1 落地时实测推翻**。若你在别处看到 93.1%，以本节为准：
+
+| 口径 | 段数 | 单行业段 | 段长=1 的段 | 有主线日 |
+|---|:--:|:--:|:--:|:--:|
+| 基线（无约束） | 244 | 170（69.7%） | 74（30.3%） | 873（53.4%） |
+| **连续 ≥3 天（实装）** | 131（−46.3%） | 89（67.9%） | **20（−73%）** | **677 = 保留 77.5%** |
+| 连续 ≥2 天（备选，未实装） | 170 | 115（67.6%） | 39（22.9%） | 764 = 87.5% |
+
+**93.1% 出自「回放后段内全保留」的事后口径，不可实盘** —— 日更产物 `mainline_detection.csv` 是
+**当日快照、覆盖式**，第 1 天不可能知道第 2、3 天也是主线。实装刻意选**无前视**版本
+（判定只用当天与前 2 个交易日）⇒ 才能进日更。
+🔑 **通用教训：验收数字必须用「实盘可实现的口径」实测，先问「这个数字产得出来吗」。**
+另一条实测结论：**跨期约束不治独舞**（单行业段 69.7%→67.9%，几乎没动）——**两种独立的病**。
 
 ---
 
@@ -289,11 +353,14 @@ f = pd.read_parquet(D/'industry/industry_daily_full.parquet'); f['date']=pd.to_d
 r = pd.read_parquet(D/'industry/daily_regime.parquet');       r['date']=pd.to_datetime(r['date'])
 m = pd.read_parquet(D/'industry/industry_members_daily.parquet')
 s = pd.read_parquet(D/'signals/signals_log.parquet')
+ml = pd.read_csv(D/'industry/mainline_detection.csv')          # A8 产物
 bad = f[(f['date']>='2026-07-01')&(f['date']<='2026-07-13')]
 print('daily_full 行数      ', len(f), '(期望 214,316+)')
 print('07-01~07-13 breadth 全0?', bool((bad['breadth']==0).all()), '(期望 False)')
 print('members_daily        ', len(m), '行 /', m['date'].nunique(), '天 (期望 8,417,497 / 1636)')
 print('regime 类别数        ', r['regime'].nunique(), '(期望 8)')
+print('mainline 列数        ', ml.shape[1], '(期望 15 —— 漏跑 §4 第 ⑦ 步会是 12)')
+print('mainline 主线数      ', int(ml['is_mainline'].sum()), '/', len(ml), '个方向群')
 print('台账总条数           ', len(s))
 print('台账 cold_zone       ', int((s['source']=='cold_zone').sum()))
 "
