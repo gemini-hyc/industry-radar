@@ -171,12 +171,21 @@ def returns_panel(path: Optional[PathLike] = None) -> pd.DataFrame:
     return panel.sort_index()
 
 
-def _forward_sums(frame: pd.DataFrame, horizon: int) -> pd.DataFrame:
+def forward_sum(frame: pd.DataFrame, horizon: int) -> pd.DataFrame:
     """
     前向窗口和：位置 t 处的值为 (t+1 .. t+horizon) 的逐日加总。
 
     rolling(h).sum() 给出截止 t 的向后窗口和，再 shift(-h) 即整体前移为前向窗口；
     min_periods=h 保证窗口内有任一缺失即返回 NaN（宁可标注"未到期"，不臆造收益）。
+
+    ⛔ **唯一正确写法，禁止自行实现。** 易错形式是
+    `frame.shift(-horizon).rolling(horizon).sum()` —— 两者形状相同、都"看起来像"
+    未来窗口，但后者在 t 处给出的是 **[t-h+1, t+1]**：h 天里 h-1 天在过去，
+    **只有 1 天是未来**。该错误会让"未来收益"与自身控制变量（如过去 20 日收益）
+    的横截面相关高达 **+0.89**，把同期关系伪装成预测关系 —— 实测宽度检验
+    偏系数 t=+15.2 ⇒ 改正后 t=+0.6（依据 docs/changes-2026-10-05-breadth-window-bug.md）。
+    ⚠️ horizon=1 时两种写法等价（`shift(-1)` 本身就是次日），错误只在 horizon>1 时出现。
+    防复发测试：tests/test_forward_returns.py。
     """
     return frame.rolling(horizon, min_periods=horizon).sum().shift(-horizon)
 
@@ -199,9 +208,9 @@ def backfill_forward_returns(
     date_pos = {d: i for i, d in enumerate(panel.index)}
     col_pos = {c: j for j, c in enumerate(panel.columns)}
 
-    fwd_panel = {h: _forward_sums(panel, h).to_numpy(dtype=float) for h in HORIZONS}
+    fwd_panel = {h: forward_sum(panel, h).to_numpy(dtype=float) for h in HORIZONS}
     fwd_bench = {
-        h: _forward_sums(benchmark.to_frame("bench"), h)["bench"].to_numpy(dtype=float)
+        h: forward_sum(benchmark.to_frame("bench"), h)["bench"].to_numpy(dtype=float)
         for h in HORIZONS
     }
 

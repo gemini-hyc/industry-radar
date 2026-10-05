@@ -8,8 +8,9 @@
 套件看起来在工作，实际形同虚设。本文件用**受控注入**证明每条断言都有抓取能力：
 
     ① 结构破坏 11 例 → 每个都应让**特定的那个测试**失败（不是「随便红一下」）
-    ② 快照篡改  4 例 → 验证「数据增长 / 可疑变动」的分类判据方向正确
-    ③ 恢复后复验     → 确认破坏与恢复本身没有副作用
+    ② 快照篡改  3 例 → 验证「数据增长 / 可疑变动」的分类判据方向正确
+    ③ 源码破坏  1 例 → 把前瞻窗口改回 2026-10-05 的错误写法，语义断言必须抓到
+    ④ 恢复后复验     → 确认破坏与恢复本身没有副作用
 
 **安全边界**
 - 只在 `/tmp` 下的**隔离沙箱**里改数据（从 `~/quant-data` 拷贝出来的副本），
@@ -165,6 +166,25 @@ SNAP_CASES = [
 
 
 # ══════════════════════════════════════════════════════════════════
+# ③ 源码破坏（前瞻窗口写法 —— 2026-10-05 事故的回归）
+#    与前两节不同：注入点必须是**仓库源码**而不是沙箱数据 ——
+#    因为这条断言考的是「代码语义」，不是「数据形状」。
+#    兜底：改前存字节，finally 逐字节还原，并复核文件与原文一致。
+# ══════════════════════════════════════════════════════════════════
+CODE_TARGET = REPO / "src/signals/ledger.py"
+CODE_BAK = CODE_TARGET.with_name(CODE_TARGET.name + ".selftest-bak")
+
+CODE_CORRECT = "    return frame.rolling(horizon, min_periods=horizon).sum().shift(-horizon)"
+CODE_BUGGY = "    return frame.shift(-1).rolling(horizon, min_periods=horizon).sum()"
+
+# (描述, 期望失败的测试方法名, 正确行, 破坏后行)
+CODE_CASES = [
+    ("把 forward_sum 改回 shift(-1).rolling(k) 错误写法",
+     "test_matches_manual_construction", CODE_CORRECT, CODE_BUGGY),
+]
+
+
+# ══════════════════════════════════════════════════════════════════
 def build_sandbox() -> int:
     if SB.exists():
         shutil.rmtree(SB)
@@ -186,6 +206,12 @@ def _run(script: str, extra_env: dict | None = None) -> tuple[int, str]:
 
 def run_invariants() -> tuple[int, list[str]]:
     rc, out = _run("test_invariants.py", {"INDUSTRY_RADAR_DATA": str(SB)})
+    return rc, sorted(set(re.findall(r"^FAIL: (\w+)", out, re.M)))
+
+
+def run_forward() -> tuple[int, list[str]]:
+    """前瞻窗口语义断言（零数据依赖，考的是仓库源码）。"""
+    rc, out = _run("test_forward_returns.py", {"INDUSTRY_RADAR_DATA": str(SB)})
     return rc, sorted(set(re.findall(r"^FAIL: (\w+)", out, re.M)))
 
 
@@ -233,6 +259,12 @@ def main() -> int:
     if BAK.exists():
         print("⚠️  发现上次残留的 .selftest-bak，先恢复基线")
         shutil.copy2(BAK, BASELINE)
+
+    # 源码兜底：若上次被中断留下 .selftest-bak，先还原源码
+    if CODE_BAK.exists():
+        print(f"⚠️  发现残留 {CODE_BAK.name}，先还原源码 {CODE_TARGET.name}")
+        shutil.copy2(CODE_BAK, CODE_TARGET)
+        CODE_BAK.unlink()
 
     n = build_sandbox()
     print(f"✅ 沙箱就绪（{n} 个文件）\n")
@@ -284,24 +316,58 @@ def main() -> int:
         BAK.unlink(missing_ok=True)
     print()
 
-    # ── ③ 恢复后复验 + 真实数据根守卫 ────────────────────────────
-    print("─── ③ 恢复后复验 + 真实数据根守卫 ───")
+    # ── ③ 源码破坏（前瞻窗口语义）──────────────────────────────
+    print("─── ③ 源码破坏（把前瞻窗口改回错误写法，必须被语义断言抓到）───")
+    code_ok = 0
+    original = CODE_TARGET.read_bytes()
+    shutil.copy2(CODE_TARGET, CODE_BAK)
+    try:
+        for name, expect, good, bad in CODE_CASES:
+            text = original.decode("utf-8")
+            if text.count(good) != 1:
+                print(f"  ❌ {name}")
+                print(f"       目标行未唯一匹配（命中 {text.count(good)} 次）"
+                      f" —— 自测失效，请同步 CODE_CORRECT")
+                continue
+            CODE_TARGET.write_text(text.replace(good, bad), encoding="utf-8")
+            rc, failed = run_forward()
+            hit = rc != 0 and expect in failed
+            code_ok += 1 if hit else 0
+            print(f"  {'✅' if hit else '❌'} {name}")
+            print(f"       期望失败={expect} | exit={rc} | 实际失败={failed or '（无）'}")
+            if not hit:
+                print("       ⚠️ 注入未被对应的断言捕获 —— 该断言可能已失效")
+    finally:
+        CODE_TARGET.write_bytes(original)
+        CODE_BAK.unlink(missing_ok=True)
+    source_restored = CODE_TARGET.read_bytes() == original
+    print(f"  {'✅' if source_restored else '❌'} 源码已逐字节还原 {CODE_TARGET.name}")
+    print()
+
+    # ── ④ 恢复后复验 + 真实数据根守卫 ────────────────────────────
+    print("─── ④ 恢复后复验 + 真实数据根守卫 ───")
     rc, failed = run_invariants()
+    rc_fwd, failed_fwd = run_forward()
     gt = guard_marker.stat().st_mtime
     leaked = [p for p in SRC.rglob("*") if p.is_file() and p.stat().st_mtime > gt]
     baseline_clean = not BAK.exists()
 
     print(f"  {'✅' if rc == 0 else '❌'} 恢复后结构断言 exit={rc} failed={failed}")
+    print(f"  {'✅' if rc_fwd == 0 else '❌'} 恢复后前瞻语义断言 exit={rc_fwd} failed={failed_fwd}")
     print(f"  {'✅' if not leaked else '❌'} 真实数据根零写入（{SRC}）"
           + (f" —— 泄漏 {[str(x) for x in leaked[:3]]}" if leaked else ""))
     print(f"  {'✅' if baseline_clean else '❌'} 基线兜底文件已清理（无 .selftest-bak 残留）")
+    print(f"  {'✅' if source_restored else '❌'} 源码兜底文件已清理 + 逐字节还原")
 
     total_ok = (caught == len(CASES) and snap_ok == len(SNAP_CASES)
-                and rc == 0 and not leaked and baseline_clean)
+                and code_ok == len(CODE_CASES)
+                and rc == 0 and rc_fwd == 0 and not leaked
+                and baseline_clean and source_restored)
     print("\n" + "═" * 76)
     print(f"结构破坏  {caught}/{len(CASES)} 被抓到"
           f"｜快照判据  {snap_ok}/{len(SNAP_CASES)} 符合预期"
-          f"｜恢复后 {'全绿' if rc == 0 else '未全绿'}")
+          f"｜源码破坏  {code_ok}/{len(CODE_CASES)} 被抓到"
+          f"｜恢复后 {'全绿' if (rc == 0 and rc_fwd == 0) else '未全绿'}")
     print(("✅ 套件有效 —— 每条断言都具备抓取能力" if total_ok
            else "❌ 套件存在问题，见上方明细"))
     return 0 if total_ok else 1
