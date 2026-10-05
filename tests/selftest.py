@@ -10,7 +10,8 @@
     ① 结构破坏 11 例 → 每个都应让**特定的那个测试**失败（不是「随便红一下」）
     ② 快照篡改  3 例 → 验证「数据增长 / 可疑变动」的分类判据方向正确
     ③ 源码破坏  1 例 → 把前瞻窗口改回 2026-10-05 的错误写法，语义断言必须抓到
-    ④ 恢复后复验     → 确认破坏与恢复本身没有副作用
+    ④ 完备性探针 1 例 → 把某日 breadth 集体置 0，check_data_completeness 必须报 BREADTH_ZERO
+    ⑤ 恢复后复验     → 确认破坏与恢复本身没有副作用
 
 **安全边界**
 - 只在 `/tmp` 下的**隔离沙箱**里改数据（从 `~/quant-data` 拷贝出来的副本），
@@ -185,6 +186,13 @@ CODE_CASES = [
 
 
 # ══════════════════════════════════════════════════════════════════
+# ④ 完备性探针（考的是 scripts/check_data_completeness.py，不是 tests/）
+#    注入点=沙箱数据：把最新交易日的 breadth 集体置 0（P0-2 的特征值）
+# ══════════════════════════════════════════════════════════════════
+BREADTH_CASE_CODE = "BREADTH_ZERO"
+
+
+# ══════════════════════════════════════════════════════════════════
 def build_sandbox() -> int:
     if SB.exists():
         shutil.rmtree(SB)
@@ -213,6 +221,16 @@ def run_forward() -> tuple[int, list[str]]:
     """前瞻窗口语义断言（零数据依赖，考的是仓库源码）。"""
     rc, out = _run("test_forward_returns.py", {"INDUSTRY_RADAR_DATA": str(SB)})
     return rc, sorted(set(re.findall(r"^FAIL: (\w+)", out, re.M)))
+
+
+def run_completeness(target_date: str) -> str:
+    """跑完备性检查（读沙箱），返回合并输出 —— 用 grep 判定是否报出指定 code。"""
+    env = {**os.environ, "NO_COLOR": "1", "INDUSTRY_RADAR_DATA": str(SB)}
+    r = subprocess.run(
+        [PY, str(REPO / "scripts/check_data_completeness.py"),
+         "--date", target_date, "--no-write"],
+        cwd=REPO, env=env, capture_output=True, text=True)
+    return r.stdout + r.stderr
 
 
 def run_snapshot() -> tuple[int, int]:
@@ -344,8 +362,30 @@ def main() -> int:
     print(f"  {'✅' if source_restored else '❌'} 源码已逐字节还原 {CODE_TARGET.name}")
     print()
 
-    # ── ④ 恢复后复验 + 真实数据根守卫 ────────────────────────────
-    print("─── ④ 恢复后复验 + 真实数据根守卫 ───")
+    # ── ④ 完备性探针（宽度零值）─────────────────────────────────
+    print("─── ④ 完备性探针（把最新交易日 breadth 集体置 0，应报 BREADTH_ZERO）───")
+    comp_ok = 0
+    full_p = SB / "industry/industry_daily_full.parquet"
+    saved_full = full_p.read_bytes()
+    try:
+        dd = pd.read_parquet(full_p)
+        dd["date"] = pd.to_datetime(dd["date"])
+        tgt = dd["date"].max().strftime("%Y-%m-%d")
+        dd.loc[dd["date"] == dd["date"].max(), "breadth"] = 0.0
+        dd.to_parquet(full_p, index=False)
+        out = run_completeness(tgt)
+        comp_hit = BREADTH_CASE_CODE in out
+        comp_ok += 1 if comp_hit else 0
+        print(f"  {'✅' if comp_hit else '❌'} {tgt} breadth 置 0 ⇒ 期望 {BREADTH_CASE_CODE}")
+        if not comp_hit:
+            print(f"       ⚠️ 探针未命中 —— 检查 check_breadth 是否接入 main()；"
+                  f"输出片段: {out.strip().splitlines()[-3:] if out.strip() else '（空）'}")
+    finally:
+        full_p.write_bytes(saved_full)
+    print()
+
+    # ── ⑤ 恢复后复验 + 真实数据根守卫 ────────────────────────────
+    print("─── ⑤ 恢复后复验 + 真实数据根守卫 ───")
     rc, failed = run_invariants()
     rc_fwd, failed_fwd = run_forward()
     gt = guard_marker.stat().st_mtime
@@ -360,13 +400,14 @@ def main() -> int:
     print(f"  {'✅' if source_restored else '❌'} 源码兜底文件已清理 + 逐字节还原")
 
     total_ok = (caught == len(CASES) and snap_ok == len(SNAP_CASES)
-                and code_ok == len(CODE_CASES)
+                and code_ok == len(CODE_CASES) and comp_ok == 1
                 and rc == 0 and rc_fwd == 0 and not leaked
                 and baseline_clean and source_restored)
     print("\n" + "═" * 76)
     print(f"结构破坏  {caught}/{len(CASES)} 被抓到"
           f"｜快照判据  {snap_ok}/{len(SNAP_CASES)} 符合预期"
           f"｜源码破坏  {code_ok}/{len(CODE_CASES)} 被抓到"
+          f"｜完备性探针  {comp_ok}/1"
           f"｜恢复后 {'全绿' if (rc == 0 and rc_fwd == 0) else '未全绿'}")
     print(("✅ 套件有效 —— 每条断言都具备抓取能力" if total_ok
            else "❌ 套件存在问题，见上方明细"))

@@ -7,11 +7,14 @@
   - load_industry_members() 原始来源: step1_industry.py
 """
 import json
+import logging
 import os
 import sys
 import pandas as pd
 import numpy as np
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # 数据根统一走 src/paths.py（env INDUSTRY_RADAR_DATA > config.yaml > 默认共享数据目录）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -20,6 +23,52 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from src.paths import DATA_DIR, MARKET_DIR, INDUSTRY_DIR
 from src.utils.data_quality import load_list_dates, load_no_limit_flags, mark_abnormal
+
+ADJ_DIR = DATA_DIR / "adj_factor"
+
+# ── 均线口径（2026-10-05 修正）──────────────────
+# ⛔ 铁律：**均线必须用复权价算**。`market/daily` 的 close 是**未复权**价，而 preclose
+#    已做除权调整 —— 直接用 close 算 MA 会让除权日变成"假跳空"（实测 5,216 个疑似除权日、
+#    幅度 99 分位 31%、最大 −67%：比亚迪 2025-07-29 337.00 → 111.01）。
+#    依据 DATA_CONTRACT.md §四：「均线 / MACD / 布林 / 平台突破…必须先用 adj_factor 复权」。
+#    实测影响：个股-天判定翻转 0.69%、行业-天 |Δbreadth|>5pp 占 3.9%、冷区信号集合差 27%。
+#    （详见 docs/breadth-what-it-can-and-cannot-do.md §六）
+MA20_WINDOW = 20
+MA13_WINDOW = 13
+ADJ_MIN_COVERAGE = 0.99     # 复权因子覆盖率下限；低于此值告警（宁可吵闹，不要静默错）
+
+
+def attach_adj_close(mkt: pd.DataFrame) -> pd.DataFrame:
+    """给行情表挂上复权因子并算出 `adj_close = close × adj_factor`。
+
+    只有**价格水平类**指标需要它（本项目仅宽度用的 MA20/MA13）；
+    `pctChg` 已是真实涨跌（除权调整过）⇒ 收益率类计算不受影响，无需改动。
+    缺失或覆盖率不足时**不抛异常**（避免拖垮日更），但会 `logger.warning`。
+    """
+    if mkt.empty or "close" not in mkt.columns or "code" not in mkt.columns:
+        return mkt
+    m = mkt.copy()
+    m["date"] = pd.to_datetime(m["date"]).dt.normalize()
+    frames, missing = [], 0
+    for d in pd.DatetimeIndex(m["date"].unique()).sort_values():
+        p = ADJ_DIR / f"{d:%Y-%m-%d}.parquet"
+        if not p.exists():
+            missing += 1
+            continue
+        a = pd.read_parquet(p, columns=["code", "adj_factor"])
+        a["date"] = d
+        frames.append(a)
+    if not frames:
+        logger.warning("复权因子不可用（%s 无文件）⇒ 均线将退化为未复权价，宽度口径不合规", ADJ_DIR)
+        return m
+    adj = pd.concat(frames, ignore_index=True)
+    m = m.merge(adj, on=["date", "code"], how="left")
+    m["adj_close"] = m["close"] * m["adj_factor"]
+    cov = float(m["adj_factor"].notna().mean())
+    if missing or cov < ADJ_MIN_COVERAGE:
+        logger.warning("复权因子覆盖不足：缺 %d 个交易日文件，行覆盖率 %.4f（下限 %.2f）",
+                       missing, cov, ADJ_MIN_COVERAGE)
+    return m
 
 
 # ── 异常样本剔除（2026-10-01）──────────────────
@@ -59,6 +108,9 @@ def load_recent_market(days: int = 250, end_date: str = None) -> pd.DataFrame:
         bad_count = mask.sum()
         if bad_count > 0:
             df.loc[mask, "amount"] = df.loc[mask, "amount"] * 10000
+
+    # 复权价（2026-10-05）：均线必须用复权价，详见 attach_adj_close 的说明
+    df = attach_adj_close(df)
     return df
 
 
@@ -116,10 +168,17 @@ def compute_concept_daily(market_df: pd.DataFrame,
                       vs 真实 3817 只，混入 32%），且 n_stocks 会退化成常数。
                       不传则沿用静态快照（旧行为，适合报告/跟踪池等短窗口调用）。
 
-    注意（MA 计算顺序）:
+    注意（MA 计算顺序与价格基准）:
       均线必须在【个股自身完整序列】上计算，再做成分归属过滤。若先按成分过滤
       再算 MA，PIT 模式下个股序列会被截断（进入行业前 / 退出行业后的行情被丢弃），
       得到的并非该股真实的 20 日均线。静态快照下两种顺序等价（成员表不随日期变）。
+      ⛔ **MA 用 `adj_close`（复权价），不是 `close`**（2026-10-05 起）：未复权价在除权日
+      有假跳空，会让 MA 判错整天。`market_df` 应由 `load_recent_market`（已自动挂 adj_close）
+      或 `attach_adj_close` 提供；缺失时退化为 `close` 并告警。
+      `min_periods` = 窗口长度（20 / 13）—— 未满窗口的个股**不进宽度分母**，与文档语义一致。
+      ⚠️ 由此产生一条**窗口约束**：调用方加载的交易日必须比目标日多至少 19 天，
+      否则目标日所有个股的 MA 都未成型、宽度退化为 NaN。`build_industry_daily_full.py`
+      已内置该护栏（拒绝写窗口前 19 天）。
     """
     if market_df.empty or not concept_members:
         return pd.DataFrame()
@@ -141,17 +200,25 @@ def compute_concept_daily(market_df: pd.DataFrame,
             return pd.DataFrame()
 
     # ── ③ 均线在「个股自身完整序列」上计算（与成分归属无关）──
+    #    ⛔ 必须用**复权价**（2026-10-05）：未复权 close 在除权日有假跳空，MA 会整天判错。
+    #    min_periods = 窗口长度（不再是 5）—— 5 日均值不是"MA20"，与"MA 未成型不进分母"的
+    #    文档语义不符（旧口径让上市第 5~19 日的个股用短窗口均值充当 MA20，且使宽度依赖加载窗口）。
+    price_col = "adj_close" if ("adj_close" in mkt.columns and mkt["adj_close"].notna().any()) else "close"
+    if price_col == "close":
+        logger.warning(
+            "compute_concept_daily 未收到 adj_close ⇒ 均线将用未复权价计算（口径违规，"
+            "见 DATA_CONTRACT.md §四.3）；调用方应先用 market_data.attach_adj_close 或 load_recent_market")
     mkt = mkt.sort_values(["code", "date"]).copy()
-    mkt["ma20"] = mkt.groupby("code")["close"].transform(
-        lambda x: x.rolling(20, min_periods=5).mean())
-    _a20 = mkt["close"] > mkt["ma20"]
+    mkt["ma20"] = mkt.groupby("code")[price_col].transform(
+        lambda x: x.rolling(MA20_WINDOW, min_periods=MA20_WINDOW).mean())
+    _a20 = mkt[price_col] > mkt["ma20"]
     # breadth_dropna: ma20 未成型(NaN)的个股不参与分母。
     # 原实现下 `close > NaN` → False → 被当作「未站上均线」计入分母，系统性压低 breadth。
     mkt["above_ma20"] = (_a20.where(mkt["ma20"].notna()) if breadth_dropna
                          else _a20.astype(int))
-    mkt["ma13"] = mkt.groupby("code")["close"].transform(
-        lambda x: x.rolling(13, min_periods=5).mean())
-    _a13 = mkt["close"] > mkt["ma13"]
+    mkt["ma13"] = mkt.groupby("code")[price_col].transform(
+        lambda x: x.rolling(MA13_WINDOW, min_periods=MA13_WINDOW).mean())
+    _a13 = mkt[price_col] > mkt["ma13"]
     mkt["above_ma13"] = (_a13.where(mkt["ma13"].notna()) if breadth_dropna
                          else _a13.astype(int))
 

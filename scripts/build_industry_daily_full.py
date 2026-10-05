@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.paths import INDUSTRY_DIR, MARKET_DIR
 from src.utils.market_data import (
+    MA20_WINDOW,
     load_recent_market,
     compute_concept_daily,
     load_industry_members,
@@ -49,6 +50,19 @@ OUT_PATH = INDUSTRY_DIR / "industry_daily_full.parquet"
 # 教训：窗口式 upsert × 上游延迟补数 = 不可逆历史坏值，且任何单日校验都发现不了。
 MIN_WARMUP_DAYS = 33          # breadth 依赖 MA20/MA13，预热需 ≥33 天（见模块 docstring）
 MAX_DEGENERATE_RATIO = 0.80   # 新窗口内「各交易日 breadth 为 0/NaN 占比」的【中位数】上限
+
+
+def _global_market_start() -> pd.Timestamp:
+    """**全局**最早的行情日（不是本次窗口的起点）。
+
+    ⚠️ 2026-10-05 修正：`_preflight_guard` 与 `_drop_warmup` 原先都用
+    `daily.date.min() <= mkt.date.min()` 判「是否全历史重建」—— 但窗口式运行时
+    这两个值**恒等**（聚合只覆盖加载窗口）⇒ 该判据**恒真** ⇒ 判据③（P0-2 退化检测）
+    在日更链路上**永远不会执行**（单元测试直接构造帧，所以没暴露）。
+    正确的参照系是全局数据起点。
+    """
+    files = sorted(MARKET_DIR.glob("*.parquet"))
+    return pd.Timestamp(files[0].stem) if files else pd.NaT
 
 
 def _preflight_guard(daily: pd.DataFrame, mkt: pd.DataFrame,
@@ -76,8 +90,8 @@ def _preflight_guard(daily: pd.DataFrame, mkt: pd.DataFrame,
         return (f"行情窗口仅 {n_days} 个交易日 < MA20/MA13 预热所需的 "
                 f"{MIN_WARMUP_DAYS} 天，breadth 必然退化")
 
-    if d_new.min() <= d_mkt.min():
-        return ""      # 窗口起点即数据起点 ⇒ 全历史重建，豁免
+    if d_new.min() <= _global_market_start():
+        return ""      # 窗口起点即**全局**数据起点 ⇒ 全历史重建，豁免
 
     degenerate = ((daily["breadth"] == 0) | daily["breadth"].isna()).to_numpy()
     per_day = (pd.DataFrame({"date": d_new, "bad": degenerate})
@@ -87,6 +101,43 @@ def _preflight_guard(daily: pd.DataFrame, mkt: pd.DataFrame,
         return (f"本次结果中 breadth 为 0/NaN 的行业占比，逐日中位数为 {med:.1%}"
                 f"（上限 {MAX_DEGENERATE_RATIO:.0%}）—— 疑似 MA 未成型导致宽度整体退化")
     return ""
+
+
+# ── 预热护栏（2026-10-05）──────────────────────────────────────────────
+# 背景：MA20/MA13 的 min_periods 已从 5 改为**窗口长度**（"MA 未成型不进分母"的正确语义）。
+# 于是「加载窗口最前面的 19 个交易日」所有个股的均线都未成型 ⇒ 宽度退化为 NaN；
+# 旧口径（min_periods=5）下这些日期不是 NaN，而是**用不足 20 日的短窗口算出的错值**
+# —— 实测 60 日窗口前 19 天有 56.8% 的行与全历史口径不一致、平均 |Δ|=8.5pp，
+# 且会被 upsert 固化。两种都不该写进产物。
+MA_WARMUP_DAYS = MA20_WINDOW - 1     # 19：窗口最前面这 19 天，MA20 一律未成型
+
+
+def _drop_warmup(daily: pd.DataFrame, mkt: pd.DataFrame,
+                 force_overwrite: bool = False,
+                 warmup: int = MA_WARMUP_DAYS):
+    """丢弃加载窗口最前面 `warmup` 个交易日的行，避免把"均线未成型"写进产物。
+
+    豁免（与 `_preflight_guard` 的判据②一致）：
+      · `--force-overwrite` 全量重建；
+      · 窗口起点 = 数据起点（同样是全历史重建）。
+      这两种情况下这些日期**应当存在**（否则 daily_full 的日期集合会小于
+      weighted_returns，直接违反 tests 的 test_date_subsets_of_full），
+      故保留行、宽度为 NaN —— 这是"未成型"的诚实表达。
+
+    返回 (新 daily, 丢弃行数, 豁免原因)；豁免原因为空串表示未豁免。
+    """
+    if warmup <= 0 or daily.empty:
+        return daily, 0, ""
+    d_mkt = pd.DatetimeIndex(sorted(pd.to_datetime(mkt["date"]).dt.normalize().unique()))
+    if force_overwrite:
+        return daily, 0, "--force-overwrite（全量重建）"
+    if pd.to_datetime(daily["date"]).min() <= _global_market_start():
+        return daily, 0, "窗口起点=**全局**数据起点（全历史重建）"
+    if len(d_mkt) <= warmup:
+        return daily.iloc[0:0], len(daily), ""
+    cut = d_mkt[warmup]                      # 第一个"预热充分"的交易日
+    keep = pd.to_datetime(daily["date"]).dt.normalize() >= cut
+    return daily[keep].copy(), int((~keep).sum()), ""
 
 
 def main(days: int = 2000, force_overwrite: bool = False,
@@ -131,6 +182,24 @@ def main(days: int = 2000, force_overwrite: bool = False,
     )
     if daily.empty:
         print("❌ 聚合结果为空")
+        return 1
+
+    # ── 预热护栏（2026-10-05）：丢弃加载窗口前 N 天的行 ──
+    # 原因：MA20/MA13 的 min_periods 已改为窗口长度（"MA 未成型不进分母"的正确语义），
+    #   于是加载窗口最前面的 N-1 个交易日**所有个股的均线都未成型** ⇒ 宽度退化为 NaN。
+    #   旧口径（min_periods=5）下这些日期不是 NaN 而是**用不足 20 日的短窗口算出的错值**
+    #   （实测 60 日窗口前 19 天：56.8% 的行与全历史口径不一致、平均 |Δ|=8.5pp），
+    #   且会被 upsert 固化。这里**直接不写**这些日期 —— 让文件里已有的历史值原样保留，
+    #   既不写入错值、也不写入 NaN。
+    daily, n_warm, warm_exempt = _drop_warmup(daily, mkt, force_overwrite)
+    if n_warm:
+        print(f"  ⏭️ 丢弃加载窗口前 {MA_WARMUP_DAYS} 个交易日的 {n_warm:,} 行"
+              f"（均线未成型；这些日期的旧值由 upsert 原样保留）")
+    elif warm_exempt:
+        print(f"  ℹ️ 预热护栏豁免：{warm_exempt} ⇒ 窗口前 {MA_WARMUP_DAYS} 天的宽度为 NaN（未成型）")
+    if daily.empty:
+        print("❌ 预热护栏后无剩余行（--days 过小）；请提高到 ≥"
+              f"{MA_WARMUP_DAYS + 1} 天")
         return 1
 
     # ── 写入护栏（2026-10-03）：窗口内输入不足即拒写 ──

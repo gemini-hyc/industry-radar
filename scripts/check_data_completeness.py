@@ -55,6 +55,11 @@ STOCK_N_MIN_MEDIAN = 5      # 仅对历史中位数 ≥ 5 的行业做骤降检�
 MEMBERS_DROP_RATIO = 0.85   # 当日全市场成分股数 < 前一交易日 × 0.85 → 警告
 NAV_COLS = ["nav_w", "nav_e", "rs_w"]
 
+# 宽度异常探针（2026-10-05）：阈值经全历史校准，见 check_breadth 的 docstring
+BREADTH_JUMP_K = 6.0        # |Δ| > K × (1.4826×MAD)；K=6 ⇒ 全历史仅 2/1635 触发（0.1%）
+BREADTH_MAD_WINDOW = 250    # 稳健尺度回看窗口（不含目标日）
+BREADTH_MAD_MIN = 60        # 回看样本下限，不足则跳过跳变判据（零值判据不受限）
+
 
 def issue(level: str, code: str, message: str, fix: str = "", **detail) -> dict:
     d = {"level": level, "code": code, "message": message}
@@ -503,6 +508,70 @@ def check_daily_full(t: pd.Timestamp):
     return [], {"latest": str(last.date())}
 
 
+def check_breadth(t: pd.Timestamp):
+    """5b. 宽度异常探针 —— **数据探针，不是信号**（2026-10-05 新增）。
+
+    为什么需要：P0-2（2026-07-01~07-13 全 131 行业 breadth 精确为 0）曾长期无人发现，
+    因为它既不改文件存在性、也不改行数。本检查把「宽度物理上不可能的值」变成可告警事件。
+
+    两条判据（**均为 WARNING** —— 本检查参与退出码，不允许把正常行情日变成失败）：
+      ① `BREADTH_ZERO`：目标日**全行业宽度均值恰为 0** ⇒ 物理上不可能
+          （要求 131 个行业里没有任何一只股票站上自己的 MA20），是 P0-2 的特征值。
+          ⚠️ 这条是**确定性**判据，必须有 —— 实测 P0-2 的**起点**（0.223 → 0.000）
+          只有 −0.22，纯 |Δ| 阈值抓不到它，只能抓到 9 天后的「恢复跳变」。
+      ② `BREADTH_JUMP`：目标日 |Δ| > K × 稳健尺度（1.4826×MAD，回看 250 个日变化）。
+          实测校准（2020-2026 全历史 1,635 个日变化）：稳健尺度 0.0669，
+          K=6 ⇒ 阈值 0.40，**触发 2 天（0.1%）**：2020-02-28（新冠暴跌，真实行情）
+          与 2026-07-14（P0-2 的恢复日）。K=5 会触发 6 天（0.4%，多为真实行情）。
+    """
+    if not FULL_PATH.exists():
+        return [], {"skipped": "industry_daily_full 不存在"}
+    try:
+        df = pd.read_parquet(FULL_PATH, columns=["date", "con_code", "breadth", "n_stocks"])
+        df["date"] = pd.to_datetime(df["date"])
+        df["breadth"] = pd.to_numeric(df["breadth"], errors="coerce")
+        df = df[pd.to_numeric(df["n_stocks"], errors="coerce").fillna(0) >= 10]
+        agg = df.groupby("date")["breadth"].mean().dropna().sort_index()
+        if t not in agg.index:
+            return [], {"skipped": f"宽度表未覆盖 {t:%Y-%m-%d}"}
+
+        cur = float(agg.loc[t])
+        stats = {"breadth": round(cur, 4)}
+
+        # ① 零值判据（确定性）
+        if cur == 0.0:
+            return [issue(
+                WARNING, "BREADTH_ZERO",
+                f"{t:%Y-%m-%d} 全行业宽度均值恰为 0（131 个行业无一只个股站上 MA20，物理上不可能）",
+                fix="疑似 P0-2 类静默坏值：运行 scripts/build_industry_daily_full.py --force-overwrite 重算，"
+                    "并检查 market/daily 该段是否已回填",
+                breadth=cur)], stats
+
+        # ② 跳变判据（稳健尺度，回看窗口不含目标日）
+        d = agg.diff().dropna()
+        pos = d.index.get_loc(t)
+        hist = d.iloc[max(0, pos - BREADTH_MAD_WINDOW): pos]
+        if len(hist) < BREADTH_MAD_MIN:
+            stats["jump_skipped"] = f"历史仅 {len(hist)} 个日变化"
+            return [], stats
+        mad = float((hist - hist.median()).abs().median())
+        scale = 1.4826 * mad
+        delta = float(d.iloc[pos])
+        thr = BREADTH_JUMP_K * scale
+        stats.update({"delta": round(delta, 4), "threshold": round(thr, 4)})
+        if scale > 0 and abs(delta) > thr:
+            return [issue(
+                WARNING, "BREADTH_JUMP",
+                f"{t:%Y-%m-%d} 全市场宽度单日变化 {delta:+.3f}，超过稳健阈值 {thr:.3f}"
+                f"（{BREADTH_JUMP_K:.0f}×1.4826×MAD={scale:.4f}，回看 {len(hist)} 日）",
+                fix="先判「真实行情」还是「数据事故」：查 market/daily 该日覆盖与 breadth 是否退化；"
+                    "若是坏值用 --force-overwrite 重算",
+                breadth=round(cur, 4), delta=round(delta, 4), threshold=round(thr, 4))], stats
+        return [], stats
+    except Exception as e:
+        return [issue(WARNING, "BREADTH_PROBE_FAIL", f"宽度异常检查异常: {e}")], {}
+
+
 # ─────────────────────── 产物指纹（provenance）───────────────────────
 def check_provenance():
     """6. 已登记产物是否带 <文件名>.meta.json 指纹。
@@ -670,6 +739,9 @@ def main():
     fu_issues, fu_stats = check_daily_full(t)
     issues += fu_issues
     report["summary"]["daily_full"] = fu_stats
+    bd_issues, bd_stats = check_breadth(t)
+    issues += bd_issues
+    report["summary"]["breadth"] = bd_stats
     pv_issues, pv_stats = check_provenance()
     issues += pv_issues
     report["summary"]["provenance"] = pv_stats

@@ -1,9 +1,12 @@
 """
-日报附加章节 — 反转跟踪池 / 主线状态 / 行情 regime
+日报附加章节 — 反转跟踪池 / 主线状态 / 行情 regime / 冷区资金面 / 宽度状态
 
 模块二（module_02_industry.py）的日报只覆盖冷区/中区/热区三个板块；
-本模块把同一条链路已经算出的另外三块结果渲染成追加章节，
+本模块把同一条链路已经算出的另外几块结果渲染成追加章节，
 由 cron/industry_review_daily.py 拼接在 module_02 报告之后。
+
+⚠️ 「宽度状态」章节是**状态描述**，不含预测（依据 docs/breadth-what-it-can-and-cannot-do.md）：
+   七个前瞻方向已测且为空 ⇒ 该章节只写当期事实与变化，不作排序依据、不进台账。
 
 设计约束:
   - 只读现有产出（tracker_report.csv / mainline_detection.csv / daily_regime.parquet），
@@ -31,6 +34,7 @@ SEP = "━" * 22  # 与 module_02 报告一致的分隔线
 TRACKER_REPORT_PATH = INDUSTRY_DIR / "tracker_report.csv"
 MAINLINE_PATH = INDUSTRY_DIR / "mainline_detection.csv"
 REGIME_PATH = INDUSTRY_DIR / "daily_regime.parquet"
+INDUSTRY_DAILY_FULL_PATH = INDUSTRY_DIR / "industry_daily_full.parquet"
 
 SYNC_SCORE_MIN = 50      # 富途同步候选门槛（与 sync_industries_to_futu.py 一致）
 TRACKING_TOP_N = 30      # 跟踪池表格最多展示行数（防极端情况下报告过长）
@@ -297,13 +301,95 @@ def format_margin_section(trade_date: str) -> str:
 
 # ── 组装与落盘 ────────────────────────────────────────────
 
+def format_width_state_section(trade_date: str) -> str:
+    """
+    八、宽度状态 —— **状态描述，不含预测**。
+
+    实证定位（2026-10-05 定稿，依据 docs/breadth-what-it-can-and-cannot-do.md）：
+      - 宽度 = 行业内收盘价站上 MA20 的个股占比；**滞后量**：价格(t−1)→宽度(t) +0.28，
+        宽度(t−1)→次日收益 +0.017 ⇒ **不能当天用**；半衰期 ≈6 个交易日 ⇒ 可靠的**状态读数**。
+      - **七个前瞻方向已测且为空**（横截面 alpha / 时点择时 / 风险预测 / 状态分位表 / 背离项 /
+        换构造 / 个股级经典形态，t 值均做重叠校正）⇒ 本节**只写当期事实与变化**，
+        ⛔ 不写预测、不作排序依据、不进台账。
+      - 与 20 日动量 rank 相关 +0.694；宽度 3 日扩张的行业清单与「3 日涨幅榜」仅 **12.8%** 重叠
+        ⇒ 它是一个**不同的筛子**，用途是"提示去看一眼"（服务 B 案：研究线索雷达）。
+    """
+    lines: List[str] = ["📏 **八、宽度状态**（**状态描述，不含预测**）", ""]
+    lines += [
+        "> 宽度 = 行业内**收盘价站上 MA20 的个股占比**。它是**滞后量**"
+        "（价格(t−1)→宽度(t) +0.28；宽度(t−1)→次日收益 +0.017）⇒ **不能当天用**；"
+        "半衰期 **≈6 个交易日** ⇒ 是可靠的**状态读数**。",
+        "> ⛔ **七个前瞻方向已测且为空**（横截面 alpha / 时点择时 / 风险预测 / 状态分位表 / "
+        "背离项 / 换构造 / 个股级经典形态）⇒ 本节**只写当期事实与变化**，不作排序依据、不进台账。",
+        "> 与 20 日动量 rank 相关 +0.694；下列清单与「3 日涨幅榜」仅 **12.8%** 重叠 ⇒ "
+        "它是一个**不同的筛子**，用途是「值得看一眼」。"
+        "依据 `docs/breadth-what-it-can-and-cannot-do.md`",
+        "",
+    ]
+    try:
+        df = pd.read_parquet(INDUSTRY_DAILY_FULL_PATH,
+                             columns=["date", "con_code", "breadth", "n_stocks"])
+        df["date"] = pd.to_datetime(df["date"])
+        df["breadth"] = pd.to_numeric(df["breadth"], errors="coerce")
+        df = df[pd.to_numeric(df["n_stocks"], errors="coerce").fillna(0) >= 10]
+        B = df.pivot(index="date", columns="con_code", values="breadth").sort_index().astype(float)
+        target = pd.Timestamp(trade_date)
+        if target not in B.index:
+            lines += [f"> ⚠️ 宽度表未覆盖 {trade_date}"
+                      f"（最新 {B.index.max():%Y-%m-%d}），本节跳过。", ""]
+            return "\n".join(lines)
+        t = int(B.index.get_loc(target))
+        if t < 20:
+            lines += ["> ⚠️ 历史不足 20 个交易日，本节跳过。", ""]
+            return "\n".join(lines)
+
+        agg = B.mean(axis=1).dropna()
+        cur = float(agg.loc[target])
+        hist = agg.iloc[max(0, t - 249): t + 1]
+        pct_rank = float((hist <= cur).mean())
+        day = B.iloc[t]
+        d5 = (day - B.iloc[t - 5]).dropna()
+        d20 = (day - B.iloc[t - 20]).dropna()
+        names = _industry_names()
+
+        lines += [
+            f"> **全市场宽度（131 行业等权均值）：{cur:.0%}**"
+            f"　近 {len(hist)} 个交易日分位 **{pct_rank:.0%}**"
+            f"　日变化 {float(day.mean() - B.iloc[t-1].mean()) * 100:+.1f}pp",
+            "",
+        ]
+
+        def _row(code, delta):
+            return (f"| {names.get(code, code)} | {float(day.get(code, float('nan'))):.0%} "
+                    f"| {float(delta) * 100:+.1f}pp |")
+
+        for title, series in (("宽度扩张最快（Δ5）", d5.nlargest(4)),
+                              ("宽度收缩最快（Δ5）", d5.nsmallest(4))):
+            lines += [f"> {title}　*（仅按变化幅度列出，非推荐、非排序）*", "",
+                      "| 行业 | 当前宽度 | Δ5 |", "|:-----|:--------:|:---:|"]
+            lines += [_row(c, v) for c, v in series.items()]
+            lines.append("")
+        lines += [
+            f"> Δ20 极值：扩张 {names.get(d20.idxmax(), d20.idxmax())} {d20.max() * 100:+.0f}pp｜"
+            f"收缩 {names.get(d20.idxmin(), d20.idxmin())} {d20.min() * 100:+.0f}pp",
+            "",
+        ]
+    except Exception as e:  # 任一环节异常都只降级为一行提示，绝不影响主报告
+        logger.warning("宽度状态章节渲染失败: %s", e)
+        lines += [f"> ⚠️ 宽度状态数据不可用：{e}", ""]
+    return "\n".join(lines)
+
+
+# ── 组装与落盘 ────────────────────────────────────────────
+
 def build_extra_sections(trade_date: str) -> str:
-    """渲染四~七四个附加章节（跟踪池 / 主线 / regime / 资金面参考），用分隔线与主报告衔接"""
+    """渲染四~八五个附加章节（跟踪池 / 主线 / regime / 资金面参考 / 宽度状态），用分隔线与主报告衔接"""
     parts = [
         format_tracking_section(trade_date),
         format_mainline_section(trade_date),
         format_regime_section(trade_date),
         format_margin_section(trade_date),
+        format_width_state_section(trade_date),
     ]
     blocks: List[str] = []
     for part in parts:
