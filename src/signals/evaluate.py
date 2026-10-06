@@ -20,6 +20,8 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from src.evaluation import cluster_t as _cluster_t
+from src.evaluation import nonoverlap_t as _nonoverlap_t
 from src.paths import INDUSTRY_DIR, SIGNALS_DIR
 from src.signals import ledger as L
 from src.signals.sources import SOURCE_SPECS, STATUS_LABEL, STATUS_ORDER
@@ -78,28 +80,22 @@ def dedup_events(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def cluster_t(values: pd.Series, dates: pd.Series):
-    """按日聚类的 t（②，**主判据**）。返回 (t, 独立日数)。"""
-    d = pd.DataFrame({"v": pd.to_numeric(values, errors="coerce"),
-                      "d": pd.to_datetime(dates)}).dropna()
-    if len(d) < 2:
-        return np.nan, 0
-    g = d.groupby("d")["v"].mean()
-    if len(g) < 2 or not g.std(ddof=1):
-        return np.nan, len(g)
-    return float(g.mean() / (g.std(ddof=1) / math.sqrt(len(g)))), len(g)
+    """按日聚类的 t（②，**主判据**）。返回 (t, 独立日数)。
+
+    🔴 2026-10-06：实现已收敛到 `src/evaluation/inference.py`（全项目唯一口径层）。
+       此处保留函数名以兼容既有调用与测试；⛔ 不得再本地实现统计逻辑。
+    """
+    return _cluster_t(values, dates)
 
 
 def nonoverlap_t(values: pd.Series, dates: pd.Series, horizon: int):
-    """非重叠抽样的 t（③，辅助）：按 signal_date 每 horizon 个取 1。返回 (t, 子样本数)。"""
-    d = pd.DataFrame({"v": pd.to_numeric(values, errors="coerce"),
-                      "d": pd.to_datetime(dates)}).dropna().sort_values("d")
-    if len(d) == 0:
-        return np.nan, 0
-    uniq = list(dict.fromkeys(d["d"].tolist()))          # 有序去重
-    sub = d[d["d"].isin(set(uniq[::max(1, int(horizon))]))]
-    if len(sub) < 2 or not sub["v"].std(ddof=1):
-        return np.nan, len(sub)
-    return float(sub["v"].mean() / (sub["v"].std(ddof=1) / math.sqrt(len(sub)))), len(sub)
+    """非重叠抽样的 t（③，辅助）：按 signal_date 每 horizon 个取 1。返回 (t, 子样本数)。
+
+    🔴 2026-10-06：实现已收敛到 `src/evaluation/inference.py`。详见那里的
+       「两种 nonoverlap_t 的输入契约差异」说明—— 事件流必须用本函数
+       （按日期去重），⛔ 不可与 `nonoverlap_t_on_index`（Series 口径）混用。
+    """
+    return _nonoverlap_t(values, dates, horizon)
 
 
 def summarize(values: pd.Series, dates: Optional[pd.Series] = None,
@@ -312,12 +308,19 @@ def render_markdown(
     lines += [_md_table(pd.DataFrame(pos_rows)), ""]
 
     # ── 概览 ──
+    # 🔴 2026-10-06：在册与已弃用**分组呈现**，不混在一张表里。
+    #   理由：混排时读者会把「已弃用来源的漂亮历史数字」误当成在册证据 ——
+    #   冷区 2,234 行里均值 +0.34pp 看着像 alpha，而它中位数是 −0.13pp。
+    #   分组后「已弃用」标题自带警告，数字不再有被误读的机会。
     lines += ["## 台账概览", ""]
-    rows = []
+    all_rows = []
     for src, g in df.groupby("source"):
+        spec = SOURCE_SPECS.get(src, {})
+        status = spec.get("status", "pending")
         matured20 = pd.to_numeric(g["fwd_excess_20"], errors="coerce").notna().sum()
-        rows.append({
-            "来源": f"{src}（{SOURCE_SPECS.get(src, {}).get('label', '')}）",
+        all_rows.append({
+            "来源": f"{src}（{spec.get('label', '')}）",
+            "定位": STATUS_LABEL.get(status, status),
             "记录数": int(raw_n.get(src, 0)),
             "去重事件数": len(g),
             "类型": "、".join(sorted(g["obs_type"].astype(str).unique())),
@@ -326,7 +329,28 @@ def render_markdown(
             "20日已到期": int(matured20),
             "20日未到期": int(len(g) - matured20),
         })
-    lines += [_md_table(pd.DataFrame(rows))]
+    ledger_df = pd.DataFrame(all_rows)
+    if ledger_df.empty:
+        lines += ["（台账为空）", ""]
+    else:
+        live = ledger_df[ledger_df["定位"] != STATUS_LABEL["retired"]]
+        dead = ledger_df[ledger_df["定位"] == STATUS_LABEL["retired"]]
+        if not live.empty:
+            lines += ["### 在册来源", "",
+                      "> 数字可用于决策判断。", ""]
+            lines += [_md_table(live), ""]
+        if not dead.empty:
+            n_dead = int(dead["记录数"].sum())
+            lines += ["### 🚫 已弃用来源（数字仅供追溯，**不可作决策依据**）", "",
+                      f"> 合计 {n_dead} 条历史记录。弃用日期与理由见上方「信号定位」表。", ""]
+            lines += [_md_table(dead), ""]
+    retired_srcs = [s for s in df["source"].unique()
+                    if SOURCE_SPECS.get(s, {}).get("status") == "retired"]
+    lines += [
+        f"> ⛔ 已弃用来源：**{'、'.join(sorted(retired_srcs)) or '无'}** —— "
+        "不再新增入账，历史行保留只为可追溯。",
+        "",
+    ]
 
     # ── 各来源详解 ──
     for src, g in df.groupby("source"):

@@ -52,7 +52,8 @@ NEED = {
         "industry_daily_full.parquet", "industry_weighted_returns.parquet",
         "industry_members_daily.parquet", "industry_members.parquet",
         "daily_regime.parquet", "industry_nav_924.parquet",
-        "mainline_detection.csv", "tracker_report.csv",
+        "mainline_detection.csv",
+        # 🔴 2026-10-06：tracker_report.csv 随跟踪池弃用从沙箱必需清单移除
     ],
     "signals": ["signals_log.parquet"],
 }

@@ -1,51 +1,54 @@
 """
 信号来源适配器
 
-两类来源，入账方式不同：
+🔴 2026-10-06：冷区与跟踪池两个来源已弃用（依据
+   docs/plan/retirement-breadth-tracker-plan.md）：
+     - `cold_zone`：宽度→未来收益无预测力，2×2 条件检验交互项 ≈ −0.01pp（无交互）
+     - `tracker_pool`：装置零产出（生产门槛 Sₜ≥50 下131 个行业命中 0 个），
+       且引擎自身 entry 事件 h=20 按日聚类 t=−2.87
+   二者的**历史行保留**在台账里（2,234 + 21 条），状态标 `retired`，只为可追溯。
 
-1. **可历史回填**（`cold_zone`）：冷区宽度反转信号完全由 `industry_daily_full`
-   的宽度序列决定，可对全历史重算。回填直接复用生产函数
-   `factor_width_reversal.detect_signals`，保证台账口径与日报完全一致——
-   否则"台账验证的"与"日报发出的"不是同一个东西，验证就失去意义。
+**唯一在册来源**：`mainline`（仅向前留痕）—— 主线方向群每日状态，
+   状态文件只保存当前值、历史无法无损重建，故由日频链路每日快照入账。
 
-2. **仅向前留痕**（`tracker_pool` / `mainline`）：这两者是有状态引擎，
-   状态文件只保存当前值（tracker_state.json / mainline_detection.csv），
-   历史无法无损重建。因此由日频链路每日快照入账，样本今后自然累积。
-   - tracker_pool 以"入场事件"入账（signal_date = 入场日），重复快照自动去重
-   - mainline 以"每日状态"入账（signal_date = 观察日），记录状态演化
+原「可历史回填」类别的冷区实现（`cold_zone_history` 及其对
+`factor_width_reversal.detect_signals` 的复用）已移除 —— 它曾保证
+"台账验证的"与"日报发出的"同口径，该价值随信号退场而消失。
 """
 
 from __future__ import annotations
 
 import ast
-import json
 import logging
 from typing import Dict, List, Optional, Sequence
 
 import pandas as pd
 
-from src.paths import FACTOR_DIR, INDUSTRY_DIR
+from src.paths import INDUSTRY_DIR
 from src.signals.ledger import make_row
 
 logger = logging.getLogger(__name__)
 
 INDUSTRY_LIST_PATH = INDUSTRY_DIR / "industry_list.parquet"
-INDUSTRY_DAILY_FULL_PATH = INDUSTRY_DIR / "industry_daily_full.parquet"
-INDUSTRY_MEMBERS_PATH = INDUSTRY_DIR / "industry_members.parquet"
-CROWD_PATH = FACTOR_DIR / "ind_crowd_turnover_daily.parquet"
-TRACKER_REPORT_PATH = INDUSTRY_DIR / "tracker_report.csv"
 MAINLINE_PATH = INDUSTRY_DIR / "mainline_detection.csv"
 
 # 信号定位（status）：决定一个来源在评估报告里的"身份"
 #   active        已被证据支持，可作为交易/决策依据
 #   observational 观察项 —— 保留入账与展示以积累样本，但**不作为交易依据，也不得据此调参**
 #   pending       样本不足以评估（向前积累中），结论未定
+#   retired       已弃用 —— **该来源已被证伪或装置已拆除**，历史行保留只为可追溯，
+#                 评估报告中单列「已弃用」分组。⛔ 不再新增入账。
+#                 🔴 2026-10-06 新增。**不可用 pending 代替**：pending 暗示"再等等就有结论"，
+#                    而 retired 的含义是"结论已下：无效"。两者混用会让弃用被误读成待观察。
 STATUS_LABEL: Dict[str, str] = {
     "active": "✅ 生效",
     "observational": "⛔ 观察项",
     "pending": "⏳ 待观察",
+    "retired": "🚫 已弃用",
 }
-STATUS_ORDER: Dict[str, int] = {"active": 0, "pending": 1, "observational": 2}
+STATUS_ORDER: Dict[str, int] = {
+    "active": 0, "pending": 1, "observational": 2, "retired": 3,
+}
 ALL_STATUSES = tuple(STATUS_ORDER)
 
 # 降级时点改为**按来源**记录在 SOURCE_SPECS[*]["status_since"]**（2026-10-05）。
@@ -58,34 +61,40 @@ SOURCE_SPECS: Dict[str, Dict] = {
         "label": "冷区宽度反转",
         "score_hint": "前20日均宽（%），越小越强",
         "direction": "asc",
-        # 定位变更（2026-10-01）：见 docs/changes-2026-10-01-cold-zone-downgrade.md
-        "status": "observational",
-        "status_since": "2026-10-01",          # 降级生效日（评估报告的观察项横幅按此渲染）
-        "status_doc": "docs/changes-2026-10-01-cold-zone-downgrade.md",
-        "status_short": "样本外证据不足，**不作交易依据**（保留展示以积累样本）",
+        # 弃用（2026-10-06）：宽度作为预测因子已证伪，冷区信号随之退场。
+        #   依据 docs/breadth-what-it-can-and-cannot-do.md + docs/plan/retirement-breadth-tracker-plan.md
+        # 🔴 保留条目而非删除：evaluate.py 按 source 查本表渲染报告，删条目会让2,234 行历史
+        #    被渲染成「⏳ 待观察」+ 空标签 —— 而"待观察"暗示"再等等就有结论"，
+        #    恰是本次清理要终结的误解。
+        "status": "retired",
+        "status_since": "2026-10-06",          # 弃用生效日（评估报告按此渲染）
+        "status_doc": "docs/plan/retirement-breadth-tracker-plan.md",
+        "status_short": "宽度无预测力，信号已退场；**保留历史仅为可追溯**",
         "status_note": (
-            "17 个候选过滤器 × IS/OOS 切分实测：样本内 17/17 全为正，但 IS↔OOS 相关仅 +0.18，"
-            "16/17 候选在样本外衰减（多个由正转负）→ 调参过程本身失效。"
-            "保留入账与展示以持续积累样本，但不作为交易依据。"
+            "宽度→未来 20日收益IC ≈ −0.004（非重叠 t= −0.74）；唯一稳健的是宽度→未来波动率"
+            "（IC +0.147 / 非重叠 t= +7.47），含义是成分股同涨同跌、**分散化失效**，"
+            "不是可交易的 alpha。以冷区为前提的 2×2 条件检验交互项 ≈ −0.01pp（无交互）。"
+            "⛔ 2026-10-06 弃用：宽度退回纯数据探针（防全零静默事故），不再作信号。"
         ),
     },
     "tracker_pool": {
         "label": "贝叶斯反转跟踪池（入场事件）",
         "score_hint": "Sₜ，越大越强",
         "direction": "desc",
-        # 降级（2026-10-05）：插桩运行真实引擎后按五条门槛检验，**入场事件前瞻超额显著为负**
-        # 依据 docs/tracker-design-and-issues.md §8.2；台账记的正是 entry 事件，故该节即对本来源的检验
-        "status": "observational",
-        "status_since": "2026-10-05",
+        # 弃用（2026-10-06）：装置已拆除。依据 docs/tracker-design-and-issues.md §8.2
+        #   —— 入场事件 h=20 均值 −0.219pp / 中位 −0.583pp / 按日聚类 t=−2.87，IS/OOS 同号。
+        #   且实测生产门槛 min_score=50 下**池子恒为 0 个**（121/131 已 eliminated）。
+        "status": "retired",
+        "status_since": "2026-10-06",
         "status_doc": "docs/tracker-design-and-issues.md",
-        "status_short": "入场事件前瞻超额**显著为负**；仅留痕，**不作交易依据**",
+        "status_short": "入场事件前瞻超额**显著为负**，且生产门槛下池子恒为空；**装置已拆除**",
         "status_note": (
-            "插桩运行真实引擎（全历史 6.8 年、8,932 条真实事件）后按五条门槛检验：entry 事件"
-            "（= 本来源的入账事件）3,917 个 —— h=20 均值 −0.219pp / 中位 −0.583pp / 为正 46%，"
-            "按日聚类 t=−2.87、按月聚类 −2.54，IS −0.79 与 OOS −3.39 **同号**；"
-            "金叉确认（引擎条件版）同负（h=20 按日 t=−2.27）。"
+            "引擎自身 entry 事件（= 本来源入账事件）3,917 个：h=20 均值 −0.219pp / 中位 −0.583pp / "
+            "为正 46%，按日聚类 t=−2.87、按月 −2.54，IS −0.79 与 OOS −3.39 **同号**。"
             "⇒ 核心前提「深睡+异动=反转起点」被**反驳**（方向相反），而非样本不足。"
-            "⛔ 既不得作交易依据，**反向使用亦不被支持**（样本与效应都小，且未做成本与可交易性检验）。"
+            "另：生产门槛 Sₜ ≥ 50 下 131 个行业**命中 0 个**（121 已 eliminated / 7 triggered / 3 tracking），"
+            "六阶段生命周期中 mature/alarming/decaying 三个阶段从未真实出现过。"
+            "⛔ 2026-10-06 弃用：装置零产出，脚本与产物一并清理。历史 21 条仅留痕。"
         ),
     },
     "mainline": {
@@ -107,26 +116,6 @@ def _load_industry_names() -> Dict[str, str]:
     return dict(zip(il["ts_code"].astype(str), il["name"].astype(str)))
 
 
-def _load_crowding_panel() -> Optional[pd.DataFrame]:
-    """
-    个股拥挤度 → (date, ind_code) 中位数面板。
-
-    与 module_02.aggregate_industry_crowding 的口径一致（行业内个股中位数）。
-    """
-    crowd = pd.read_parquet(CROWD_PATH)[["date", "code", "value"]]
-    members = pd.read_parquet(INDUSTRY_MEMBERS_PATH)[["stock_code", "ind_code"]]
-
-    code_map = dict(zip(
-        members["stock_code"].astype(str).str.upper(),
-        members["ind_code"].astype(str),
-    ))
-    crowd["code"] = crowd["code"].astype(str).str.upper()
-    crowd = crowd[crowd["code"].isin(code_map)].copy()
-    crowd["ind_code"] = crowd["code"].map(code_map)
-    crowd["date"] = pd.to_datetime(crowd["date"])
-    return crowd.groupby(["date", "ind_code"])["value"].median().unstack()
-
-
 def _num(v):
     try:
         f = float(v)
@@ -146,176 +135,15 @@ def _parse_group_list(raw) -> List[str]:
     return []
 
 
-# ── 来源一：冷区宽度反转（可历史回填）────────────────────
-
-def _margin_pct_or_none(margin_lookup, date, code):
-    """从 (date × ind_code) 分位矩阵取标量；缺失返回 None"""
-    if margin_lookup is None or code is None or len(margin_lookup) == 0:
-        return None
-    if date not in margin_lookup.index or code not in margin_lookup.columns:
-        return None
-    v = margin_lookup.at[date, code]
-    return None if v is None or pd.isna(v) else round(float(v), 4)
-
-
-def cold_zone_history(
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-    with_crowding: bool = True,
-    with_margin: bool = True,
-    window_days: int = 60,
-    progress_every: int = 250,
-    expansion_rule: str = "exactly3",
-    cold_threshold_mode: str = "dynamic",
-) -> List[Dict]:
-    """
-    对全历史重算冷区宽度反转信号，返回台账记录列表。
-
-    参数:
-        start / end  日期区间（YYYY-MM-DD），None 表示不限
-        with_crowding 是否附带行业拥挤度特征（首次运行需聚合 850 万行个股数据，较慢）
-        with_margin  是否附带"行业两融余额/流通市值"横截面分位（读 signals 缓存，很快）
-        window_days  每个信号日传入的窗口长度（需 >= 20，默认 60 足够覆盖"前20日均宽"）
-        expansion_rule / cold_threshold_mode
-                     透传给 detect_signals 的口径开关，**默认值即生产口径**。
-                     仅在做规则 A/B 复核时改（见 docs/action-items.md D7），
-                     改动后产出的信号与台账既有口径不可混用。
-    """
-    from src.daily_review.factor_width_reversal import detect_signals
-
-    # 注意：detect_signals 内部按 "con_code" 分组，这里保持原始列名不动，
-    # 以保证台账与生产日报走的是同一套口径
-    daily = pd.read_parquet(INDUSTRY_DAILY_FULL_PATH)[["date", "con_code", "breadth", "total_amount"]]
-    daily["date"] = pd.to_datetime(daily["date"])
-    daily = daily.sort_values(["date", "con_code"]).reset_index(drop=True)
-
-    names = _load_industry_names()
-
-    crowd_panel = None
-    if with_crowding:
-        try:
-            crowd_panel = _load_crowding_panel()
-            logger.info("拥挤度面板已加载: %s", crowd_panel.shape)
-        except Exception as e:  # 非致命：拥挤度只是特征快照
-            logger.warning("拥挤度面板加载失败（跳过该特征）: %s", e)
-
-    # 两融占比分位（行业融资余额/流通市值）—— 实证：2024-09 起 583 条冷区信号中，
-    # 低分位组 20 日超额 −1.67pp、高分位组 +1.50pp（docs/sentiment-data-evaluation.md）
-    margin_lookup = None
-    if with_margin:
-        try:
-            from src.signals.sentiment import percentile_lookup
-            margin_lookup = percentile_lookup()
-            logger.info("两融占比分位面板已加载: %s",
-                        None if margin_lookup is None else margin_lookup.shape)
-        except Exception as e:
-            logger.warning("两融占比面板加载失败（跳过该特征）: %s", e)
-
-    # 按日期排序后，各交易日占连续行区间 —— 窗口切片 O(1)
-    sizes = daily.groupby("date", sort=True).size()
-    row_start: Dict[pd.Timestamp, int] = {}
-    row_end: Dict[pd.Timestamp, int] = {}
-    pos = 0
-    for d, n in sizes.items():
-        row_start[d] = pos
-        row_end[d] = pos + int(n)
-        pos += int(n)
-
-    trade_dates = list(sizes.index)          # 全部交易日（窗口计算必须用全量）
-    date_pos = {d: i for i, d in enumerate(trade_dates)}
-
-    selected = trade_dates
-    if start is not None:
-        selected = [d for d in selected if d >= pd.Timestamp(start)]
-    if end is not None:
-        selected = [d for d in selected if d <= pd.Timestamp(end)]
-
-    rows: List[Dict] = []
-    for k, d in enumerate(selected):
-        k_full = date_pos[d]
-        lo = row_start[trade_dates[max(0, k_full - window_days)]]
-        hi = row_end[d]
-        window = daily.iloc[lo:hi]
-
-        today = window[window["date"] == d]
-        if today.empty:
-            continue
-        market_breadth = float(today["breadth"].mean())
-
-        crowding_map = None
-        if crowd_panel is not None and d in crowd_panel.index:
-            crowding_map = crowd_panel.loc[d].dropna().to_dict()
-
-        signals = detect_signals(
-            d.strftime("%Y-%m-%d"),
-            window,
-            names,
-            crowding_map,
-            market_breadth=market_breadth,
-            expansion_rule=expansion_rule,
-            cold_threshold_mode=cold_threshold_mode,
-        )
-        for s in signals:
-            rows.append(make_row(
-                source="cold_zone",
-                signal_date=d,
-                ind_code=s.get("industry_code"),
-                ind_name=s.get("industry_name", ""),
-                score=s.get("pre_breadth_20d"),
-                tier=s.get("tier"),
-                obs_type="event",
-                features={
-                    "pre_breadth_20d": s.get("pre_breadth_20d"),
-                    "expansion_days": s.get("expansion_days"),
-                    "d1": s.get("d1"), "d2": s.get("d2"), "d3": s.get("d3"),
-                    "d1_ratio": s.get("d1_ratio"),
-                    "vol_ratio": s.get("vol_ratio"),
-                    "breadth_trajectory": s.get("breadth_trajectory"),
-                    "crowding": s.get("crowding"),
-                    "margin_pct": _margin_pct_or_none(margin_lookup, d, s.get("industry_code")),
-                    "market_breadth": round(market_breadth, 4),
-                },
-            ))
-
-        if progress_every and (k + 1) % progress_every == 0:
-            print(f"  … 冷区回填进度 {k + 1}/{len(selected)} 个交易日，累计 {len(rows)} 条信号", flush=True)
-
-    logger.info("冷区历史回填完成: %d 条信号 / %d 个交易日", len(rows), len(selected))
-    return rows
-
+# 🔴 2026-10-06 已移除：冷区宽度反转来源（_margin_pct_or_none / cold_zone_history，
+#    含其对 factor_width_reversal 的惰性 import）与仅服务它的 _load_crowding_panel。
+#    保留 _load_industry_names / _num / _parse_group_list —— 它们被 _snapshot_mainline 使用。
+#    依据 docs/plan/retirement-breadth-tracker-plan.md §3.1（必补三）。
 
 # ── 来源二/三：每日快照（仅向前留痕）──────────────────────
 
-def _snapshot_tracker(obs_date: str) -> List[Dict]:
-    if not TRACKER_REPORT_PATH.exists():
-        return []
-    df = pd.read_csv(TRACKER_REPORT_PATH)
-    if "status" not in df.columns:
-        return []
-    df = df[df["status"] == "tracking"]
-
-    rows: List[Dict] = []
-    for _, r in df.iterrows():
-        entry = r.get("signal_date")
-        entry = str(entry) if pd.notna(entry) else str(obs_date)
-        rows.append(make_row(
-            source="tracker_pool",
-            signal_date=entry,          # 以入场事件入账 → 每日重复快照自动去重
-            ind_code=r.get("code"),
-            ind_name=str(r.get("name", "")),
-            score=_num(r.get("score")),
-            tier=str(r.get("phase", "")),
-            obs_type="event",
-            features={
-                "S0": _num(r.get("S0")),
-                "days": _num(r.get("days")),
-                "entry_confidence": _num(r.get("entry_confidence")),
-                "last_date": str(r.get("last_date", "")),
-                "observed_on": str(obs_date),
-            },
-        ))
-    return rows
-
+# 🔴 `_snapshot_tracker` 已于 2026-10-06 删除（tracker_pool 弃用）。
+#    依赖的 TRACKER_REPORT_PATH 常量与 industry_tracker.py 一并清理（计划 §3.1/§3.2）。
 
 def _snapshot_mainline(obs_date: str) -> List[Dict]:
     if not MAINLINE_PATH.exists():
@@ -360,12 +188,13 @@ def _snapshot_mainline(obs_date: str) -> List[Dict]:
 
 def snapshot_signals(
     trade_date: str,
-    sources: Sequence[str] = ("tracker_pool", "mainline"),
+    sources: Sequence[str] = ("mainline",),
 ) -> List[Dict]:
-    """采集当日快照信号（跟踪池入场事件 + 主线成员行业状态）"""
+    """采集当日快照信号（主线成员行业状态）。
+
+    🔴 2026-10-06：`tracker_pool` 已弃用，其快照分支与 `_snapshot_tracker` 一并移除。
+    """
     rows: List[Dict] = []
-    if "tracker_pool" in sources:
-        rows += _snapshot_tracker(trade_date)
     if "mainline" in sources:
         rows += _snapshot_mainline(trade_date)
     return rows

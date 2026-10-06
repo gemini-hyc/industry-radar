@@ -1,11 +1,14 @@
 """
-每日复盘系统 · 模块二：行业跟踪（v2 三区框架）
-核心问题：钱在往哪里流？当前有哪些值得注意的信号？
+每日复盘系统 · 模块二：行业跟踪
 
-v2 变更（2026-07-24）：
-  - 用三区框架替换旧 5 子模块（排名/持续性/成交额/生命周期/综合研判）
-  - 冷区宽度反转因子 → 唯一已验证有效的信号
-  - 中区/热区预留接口
+🔴 2026-10-06 三区框架（冷区/中区/热区）整体退场。
+   原因（依据 docs/plan/retirement-breadth-tracker-plan.md）：
+     - 冷区宽度反转：宽度→未来收益无预测力（IC ≈ −0.004，非重叠 t = −0.74）；
+       以冷区为前提的 2×2 条件检验交互项 ≈ −0.01pp，**无交互**。
+     - 中区/热区：**从未实现**，一直是"待实现"占位，无任何实证内容。
+     - 结构化结论 JSON 的唯一消费者（冷区资金面章节）已随之删除 ⇒ 整体摘除。
+   ⇒ 本模块现在**只负责行业层面的状态读数**（前置检查 + 当日快照生成），
+     不再产出任何信号章节。报告主体章节由新体系按需重建。
 
 数据源：
   - 行业日频数据 → data/industry/industry_daily.parquet
@@ -15,7 +18,6 @@ v2 变更（2026-07-24）：
   - 行业加权涨跌幅 → data/industry/industry_weighted_returns.parquet
 """
 
-import json
 import logging
 import sys
 from datetime import datetime
@@ -30,13 +32,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))  # 兼容脚本直跑: python3 src/daily_review/module_02_industry.py
 from src.paths import DATA_DIR
-from src.utils.provenance import save_dataframe, save_text, save_json
+from src.utils.provenance import save_dataframe, save_text
 
 # 数据路径常量
 WEIGHTED_RETURNS_PATH = DATA_DIR / "industry" / "industry_weighted_returns.parquet"
 INDUSTRY_MEMBERS_PATH = DATA_DIR / "industry" / "industry_members.parquet"
 INDUSTRY_LIST_PATH = DATA_DIR / "industry" / "industry_list.parquet"
-TRACKER_STATE_PATH = DATA_DIR / "industry" / "tracker_state.json"
 MARKET_DAILY_DIR = DATA_DIR / "market" / "daily"
 CROWDING_PATH = DATA_DIR / "factors" / "ind_crowd_turnover_daily.parquet"
 INDUSTRY_DAILY_CACHE = DATA_DIR / "industry" / "industry_daily.parquet"
@@ -56,19 +57,6 @@ def load_industry_names() -> Dict[str, str]:
 def load_industry_members() -> pd.DataFrame:
     """加载行业成员映射"""
     return pd.read_parquet(INDUSTRY_MEMBERS_PATH)
-
-
-def load_tracker_state() -> Dict:
-    """加载跟踪状态JSON，文件缺失时返回空字典并容错降级"""
-    try:
-        with open(TRACKER_STATE_PATH) as f:
-            return json.load(f)
-    except FileNotFoundError:
-        logging.warning("跟踪状态文件缺失: %s，生命周期全景将为空", TRACKER_STATE_PATH)
-        return {}
-    except json.JSONDecodeError as e:
-        logging.error("跟踪状态文件解析失败: %s — %s", TRACKER_STATE_PATH, e)
-        return {}
 
 
 def load_weighted_returns() -> pd.DataFrame:
@@ -357,168 +345,9 @@ def fmt_amount(val: float) -> str:
 
 
 # ═══════════════════════════════════════════════
-# 冷区宽度反转信号 — 格式化
-# ═══════════════════════════════════════════════
-
-TIER_LABELS = {
-    "high": "★★★ 高置信",
-    "standard": "★★ 标准",
-    "watch": "★ 观察",
-}
-
-TIER_ORDER = {"high": 0, "standard": 1, "watch": 2}
-
-# 定位声明（2026-10-01）：冷区信号已降级为「观察项」，不再作为交易依据。
-# 这是**标注**变更，不涉及触发条件、分级或任何数值口径。
-# 详见 docs/changes-2026-10-01-cold-zone-downgrade.md
-COLD_ZONE_STATUS_NOTE = (
-    "> ⛔ **定位：观察项**（2026-10-01 起降级）—— 可用于描述「哪些冷门行业开始转暖」，"
-    "但**不作为交易依据**：17 个候选过滤器在样本外全部衰减（IS↔OOS 相关仅 +0.18），"
-    "历史上 20 日超额 +0.29pp，扣掉双边成本后基本不可交易。保留展示以持续积累样本。"
-)
-
-
-def format_cold_zone_section(signals: List[Dict]) -> str:
-    """
-    格式化冷区宽度反转信号为 Markdown。
-
-    参数:
-        signals: detect_signals() 返回的信号列表
-
-    返回:
-        Markdown 格式的冷区报告段落
-    """
-    lines = ["🧊 **一、宽度反转信号（冷区）**", ""]
-
-    if not signals:
-        lines.append("今日无冷区宽度反转信号。")
-        lines.append("")
-        lines.append("> 触发条件：前20日均宽 ≤ 冷区阈值（随全市场宽度动态调制），宽度连续扩张恰好第 3 天触发一次")
-        lines.append(COLD_ZONE_STATUS_NOTE)
-        return "\n".join(lines)
-
-    lines.append("> 触发条件：前20日均宽 ≤ 冷区阈值（随全市场宽度动态调制），宽度连续扩张恰好第 3 天触发一次")
-    lines.append(f"> 今日共 {len(signals)} 条信号（按冷度排序）")
-    lines.append(COLD_ZONE_STATUS_NOTE)
-    lines.append("")
-
-    # ── 信号列表 ──
-    lines.append("| 行业 | 级别 | 前20日均宽 | D1/D2/D3 | 量比 | 宽度轨迹 | 拥挤 |")
-    lines.append("|:-----|:----:|:----------:|:---------|:----:|:---------|:----:|")
-
-    for s in signals:
-        name = s["industry_name"]
-        tier = s["tier"]
-        pre_bw = s["pre_breadth_20d"]
-        d_vals = f"{s['d1']:.1%}/{s['d2']:.1%}/{s['d3']:.1%}"
-        vol = f"{s['vol_ratio']:.1f}x"
-        traj = s["breadth_trajectory"]
-        crowd = s.get("crowding")
-        crowd_str = f"{crowd:.0%}" if crowd is not None else "—"
-
-        tier_icon = {"high": "🔴", "standard": "🟡", "watch": "🟢"}.get(tier, "")
-
-        lines.append(
-            f"| {tier_icon} {name} | **{TIER_LABELS[tier]}** | {pre_bw:.0f}% "
-            f"| {d_vals} | {vol} | {traj} | {crowd_str} |"
-        )
-
-    lines.append("")
-
-    # ── 信号分级说明 ──
-    lines.append("### 信号分级")
-    lines.append("")
-
-    by_tier: Dict[str, List[Dict]] = {"high": [], "standard": [], "watch": []}
-    for s in signals:
-        by_tier[s["tier"]].append(s)
-
-    for tier_key in ["high", "standard", "watch"]:
-        tier_signals = by_tier[tier_key]
-        if not tier_signals:
-            continue
-        label = TIER_LABELS[tier_key]
-        lines.append(f"**{label}**：")
-        lines.append("")
-        for s in tier_signals:
-            name = s["industry_name"]
-            pre_bw = s["pre_breadth_20d"]
-
-            # 关键特征
-            features = [f"前20日均宽 {pre_bw:.0f}%"]
-            if s["d1_ratio"] >= 0.60:
-                features.append("首日爆发力强")
-            if s["vol_ratio"] >= 1.3:
-                features.append(f"显著放量({s['vol_ratio']:.1f}x)")
-            elif s["vol_ratio"] >= 1.1:
-                features.append(f"温和放量({s['vol_ratio']:.1f}x)")
-            if s["crowding"] is not None and s["crowding"] > 0.6:
-                features.append(f"⚠️拥挤度偏高({s['crowding']:.0%})")
-
-            feature_str = "，".join(features)
-            lines.append(f"- **{name}**：{feature_str}")
-        lines.append("")
-
-    lines.append("> 分级依据：前20日均宽 <10% 高置信 / <20% 标准 / <冷区阈值 观察")
-    lines.append("> D1占比和量比为附属参考信息，不参与信号分级。")
-    lines.append("> 注：此处「观察」指**分级档位**；与本节开头的「观察项」（信号定位）不是一回事。")
-
-    return "\n".join(lines)
-
-
-# ═══════════════════════════════════════════════
-# 结构化 JSON 输出（v2 — 三区框架）
-# ═══════════════════════════════════════════════
-
-def _build_m02_conclusion_json_v2(
-    trade_date: str,
-    cold_signals: List[Dict],
-) -> Dict:
-    """
-    构建模块二 v2 结构化结论 JSON。
-
-    参数:
-        trade_date: 交易日期
-        cold_signals: 冷区宽度反转信号列表
-
-    返回:
-        Dict 符合 plan/module_02_rebuild.md §5.2 规格
-    """
-    return {
-        "date": trade_date,
-        "module": "industry_tracking_v2",
-        "cold_zone_signals": [
-            {
-                "industry_code": s["industry_code"],
-                "industry_name": s["industry_name"],
-                "tier": s["tier"],
-                "pre_breadth_20d": s["pre_breadth_20d"],
-                "expansion_days": s["expansion_days"],
-                "breadth_trajectory": s["breadth_trajectory"],
-                "crowding": s["crowding"],
-            }
-            for s in cold_signals
-        ],
-        "mid_zone": None,   # 待实现
-        "hot_zone": None,   # 待实现
-    }
-
-
-def _write_m02_conclusion_json(trade_date: str, conclusion: Dict) -> Optional[Path]:
-    """将模块二结构化结论写入 JSON 文件"""
-    try:
-        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        path = save_json(
-            conclusion, REPORTS_DIR / f"{trade_date}_module_02_conclusion.json",
-            producer="src/daily_review/module_02_industry.py",
-            params={"trade_date": trade_date, "kind": "module_02_conclusion"},
-            inputs=[WEIGHTED_RETURNS_PATH],
-        )
-        logging.info("模块二结构化结论已写入 %s", path)
-        return path
-    except Exception as e:
-        logging.warning("模块二结构化结论写入失败: %s", e)
-        return None
+# 🔴 2026-10-06 已移除：冷区宽度反转格式化（format_cold_zone_section）
+#    与结构化结论 JSON（_build_m02_conclusion_json_v2 / _write_m02_conclusion_json）。
+#    依据 docs/plan/retirement-breadth-tracker-plan.md §2.3。
 
 
 # ═══════════════════════════════════════════════
@@ -527,7 +356,10 @@ def _write_m02_conclusion_json(trade_date: str, conclusion: Dict) -> Optional[Pa
 
 def run(trade_date: str = None) -> str:
     """
-    运行行业跟踪全模块（v2 三区框架），返回 Markdown 格式报告。
+    运行行业跟踪模块，返回 Markdown 格式报告。
+
+    🔴 2026-10-06：三区框架已退场，本函数不再输出信号章节，
+       只做前置检查 + 当日行业数据状态读数（详见模块 docstring）。
 
     参数:
         trade_date: 交易日期，默认为今天
@@ -587,49 +419,25 @@ def run(trade_date: str = None) -> str:
     except Exception as e:
         logging.warning("拥挤度聚合失败（非致命）: %s", e)
 
-    # ── 一、冷区宽度反转信号 ──
-    cold_signals: List[Dict] = []
+    # ── 行业层面的状态读数 ──
+    # 🔴 2026-10-06：三区框架（冷区/中区/热区）整体退场（主人拍板，与冷区同步清理）。
+    #    冷区：无预测力且 2×2 交互项 ≈ −0.01pp；中区/热区：从未实现，一直是空占位。
+    #    本模块现在只报「当日行业数据是否齐备」，不再输出任何信号章节。
+    lines.append("📌 **当日行业数据状态**")
+    lines.append("")
     try:
-        from src.daily_review.factor_width_reversal import detect_signals
-
-        # 当日全市场宽度（用于动态调制冷区阈值）
-        today_data = daily_data[daily_data["date"] == trade_date]
-        market_breadth = float(today_data["breadth"].mean()) if len(today_data) > 0 else None
-
-        cold_signals = detect_signals(
-            trade_date, daily_data, names, crowding_map,
-            market_breadth=market_breadth,
-        )
-        lines.append(format_cold_zone_section(cold_signals))
-        lines.append("")
-        lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-        lines.append("")
+        n_ind = daily_data["con_code"].nunique() if len(daily_data) else 0
+        n_days = daily_data["date"].nunique() if len(daily_data) else 0
+        lines.append(f"- 行业数：**{n_ind}**　·　窗口交易日：**{n_days}**"
+                     f"（截至 {trade_date}）")
+        lines.append(f"- 拥挤度覆盖：**{len(crowding_map)}** 个行业")
     except Exception as e:
-        logging.error("module_02 冷区信号检测失败: %s", e, exc_info=True)
-        errors.append(f"冷区信号检测失败: {e}")
-        lines.append(f"⚠️ 冷区信号检测失败：{e}")
-        lines.append("")
-
-    # ── 二、中区行业（待实现） ──
-    lines.append("🟡 **二、中区行业**（待实现）")
+        logging.warning("状态读数渲染失败（非致命）: %s", e)
+        lines.append(f"- ⚠️ 状态读数不可用：{e}")
     lines.append("")
-    lines.append("> 中区（宽度30-70%）信号挖掘尚未完成，待回测验证后加入。")
-    lines.append("")
-    lines.append("━━━━━━━━━━━━━━━━━━━━━━")
-    lines.append("")
-
-    # ── 三、热区行业（待实现） ──
-    lines.append("🔴 **三、热区行业**（待实现）")
-    lines.append("")
-    lines.append("> 热区（宽度>70%）信号挖掘尚未完成，待回测验证后加入。")
-    lines.append("")
-
-    # ── 结构化 JSON 输出 ──
-    try:
-        m02_json = _build_m02_conclusion_json_v2(trade_date, cold_signals)
-        _write_m02_conclusion_json(trade_date, m02_json)
-    except Exception as e:
-        logging.warning("module_02 结构化JSON写入失败（非致命）: %s", e)
+    lines.append("> 旧「宽度反转（冷区）」章节已随宽度预测用途弃用而移除；"
+                 "中区/热区从未实现，一并清空。")
+    lines.append("> 本节只报数据是否齐备，**不含任何预测**。")
 
     # ── 错误汇总 ──
     if errors:

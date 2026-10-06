@@ -1,16 +1,15 @@
 """
-日报附加章节 — 反转跟踪池 / 主线状态 / 行情 regime / 冷区资金面 / 宽度状态
+日报附加章节 — 主线状态 / 行情 regime
 
-模块二（module_02_industry.py）的日报只覆盖冷区/中区/热区三个板块；
-本模块把同一条链路已经算出的另外几块结果渲染成追加章节，
-由 cron/industry_review_daily.py 拼接在 module_02 报告之后。
-
-⚠️ 「宽度状态」章节是**状态描述**，不含预测（依据 docs/breadth-what-it-can-and-cannot-do.md）：
-   七个前瞻方向已测且为空 ⇒ 该章节只写当期事实与变化，不作排序依据、不进台账。
+🔴 2026-10-06：反转跟踪池、冷区资金面参考、宽度状态三节已移除
+  （对应来源 `tracker_pool` / `cold_zone` 已弃用，依据
+   docs/plan/retirement-breadth-tracker-plan.md）。
+  模块二（module_02_industry.py）的三区框架（冷区/中区/热区）同期退场，
+  现在只报「当日行业数据是否齐备」，不再输出信号章节。
 
 设计约束:
-  - 只读现有产出（tracker_report.csv / mainline_detection.csv / daily_regime.parquet），
-    不重算、不写业务数据、不改 module_02 口径
+  - 只读现有产出（mainline_detection.csv / daily_regime.parquet），
+    不重算、不写业务数据
   - 任一数据源缺失或异常时降级为一行提示，绝不影响主报告生成
   - 章节风格与 module_02 保持一致（emoji 标题 + 分隔线 + 引用说明 + Markdown 表格）
 """
@@ -18,7 +17,6 @@
 from __future__ import annotations
 
 import ast
-import json
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -31,16 +29,8 @@ logger = logging.getLogger(__name__)
 
 SEP = "━" * 22  # 与 module_02 报告一致的分隔线
 
-TRACKER_REPORT_PATH = INDUSTRY_DIR / "tracker_report.csv"
 MAINLINE_PATH = INDUSTRY_DIR / "mainline_detection.csv"
 REGIME_PATH = INDUSTRY_DIR / "daily_regime.parquet"
-INDUSTRY_DAILY_FULL_PATH = INDUSTRY_DIR / "industry_daily_full.parquet"
-
-SYNC_SCORE_MIN = 50      # 富途同步候选门槛（与 sync_industries_to_futu.py 一致）
-TRACKING_TOP_N = 30      # 跟踪池表格最多展示行数（防极端情况下报告过长）
-
-PHASE_ORDER = {"early": 0, "growing": 1, "mature": 2, "alarming": 3}
-PHASE_LABEL = {"early": "早期", "growing": "成长", "mature": "成熟", "alarming": "预警"}
 
 
 # ── 小工具 ────────────────────────────────────────────────
@@ -72,69 +62,12 @@ def _short_date(v) -> str:
     return s[5:] if len(s) >= 10 else (s or "—")
 
 
-# ── 四、反转跟踪池 ────────────────────────────────────────
+# 🔴 2026-10-06 已移除：四、反转跟踪池（见 docs/plan/retirement-breadth-tracker-plan.md §2.3）
 
-def format_tracking_section(trade_date: str) -> str:
-    lines: List[str] = ["📈 **四、反转跟踪池**（贝叶斯反转引擎）", ""]
-    try:
-        df = pd.read_csv(TRACKER_REPORT_PATH)
-    except Exception as e:  # 文件缺失 / 读取失败 → 降级提示
-        logger.warning("跟踪池数据读取失败: %s", e)
-        lines += [f"> ⚠️ 跟踪数据读取失败（{TRACKER_REPORT_PATH.name}）：{e}", ""]
-        return "\n".join(lines)
-
-    if "status" not in df.columns or df.empty:
-        lines += ["> 跟踪数据为空。", ""]
-        return "\n".join(lines)
-
-    df = df[df["status"] == "tracking"].copy()
-    if df.empty:
-        lines += ["今日无跟踪中的行业。", ""]
-        return "\n".join(lines)
-
-    df["_rank"] = df["phase"].map(PHASE_ORDER).fillna(9)
-    df = df.sort_values(
-        ["_rank", "entry_confidence", "score"],
-        ascending=[True, False, False],
-    )
-
-    dist = df["phase"].map(lambda p: PHASE_LABEL.get(str(p), str(p))).value_counts()
-    dist_txt = " / ".join(f"{k} {v}" for k, v in dist.items())
-    sync = df[df["score"] >= SYNC_SCORE_MIN]
-
-    lines.append(
-        f"> 跟踪中 **{len(df)}** 个行业（{dist_txt}）；"
-        f"富途同步候选（Sₜ ≥ {SYNC_SCORE_MIN}）**{len(sync)}** 个"
-    )
-    lines.append("")
-    lines.append("| # | 行业 | 阶段 | 信号日 | S₀ | Sₜ | 置信 | 天数 |")
-    lines.append("|:--:|:-----|:----:|:------:|:--:|:--:|:----:|:----:|")
-
-    shown = df.head(TRACKING_TOP_N)
-    for i, (_, r) in enumerate(shown.iterrows(), 1):
-        phase = PHASE_LABEL.get(str(r.get("phase")), str(r.get("phase", "")))
-        lines.append(
-            f"| {i} | {r.get('name', '')} | {phase} | {_short_date(r.get('signal_date'))} "
-            f"| {_fmt(r.get('S0'), '.0f')} | {_fmt(r.get('score'))} "
-            f"| {_fmt(r.get('entry_confidence'), '.2f')} | {_fmt(r.get('days'), '.0f')} |"
-        )
-
-    if len(df) > len(shown):
-        lines += ["", f"> 共 {len(df)} 个，仅列出前 {len(shown)} 个。"]
-
-    if len(sync):
-        lines += ["", "**富途同步候选（Sₜ ≥ 50）：** " + "、".join(
-            f"{r.get('name', '')}（Sₜ={_fmt(r.get('score'))}）" for _, r in sync.iterrows()
-        )]
-
-    lines.append("")
-    return "\n".join(lines)
-
-
-# ── 五、主线状态 ──────────────────────────────────────────
+# ── 一、主线状态 ──────────────────────────────────────────
 
 def format_mainline_section(trade_date: str) -> str:
-    lines: List[str] = ["🧭 **五、主线状态**（方向群探测）", ""]
+    lines: List[str] = ["🧭 **一、主线状态**（方向群探测）", ""]
     try:
         df = pd.read_csv(MAINLINE_PATH)
     except Exception as e:
@@ -180,10 +113,10 @@ def format_mainline_section(trade_date: str) -> str:
     return "\n".join(lines)
 
 
-# ── 六、行情 regime ───────────────────────────────────────
+# ── 二、行情 regime ───────────────────────────────────────
 
 def format_regime_section(trade_date: str) -> str:
-    lines: List[str] = ["🌡️ **六、行情 regime**（结构性 / 轮动 / 全面涨跌）", ""]
+    lines: List[str] = ["🌡️ **二、行情 regime**（结构性 / 轮动 / 全面涨跌）", ""]
     try:
         df = pd.read_parquet(REGIME_PATH)
     except Exception as e:
@@ -220,176 +153,22 @@ def format_regime_section(trade_date: str) -> str:
     return "\n".join(lines)
 
 
-# ── 七、冷区信号资金面参考 ────────────────────────────────
+# 🔴 2026-10-06 已移除：七、冷区信号资金面参考（见 docs/plan/retirement-breadth-tracker-plan.md §2.3）
 
-_TIER_LABEL = {"high": "★★ 高置信", "standard": "★★ 标准", "watch": "★ 观察"}
-
-
-def _industry_names() -> Dict[str, str]:
-    try:
-        il = pd.read_parquet(INDUSTRY_DIR / "industry_list.parquet")
-        return dict(zip(il["ts_code"].astype(str), il["name"].astype(str)))
-    except Exception:
-        return {}
-
-
-def format_margin_section(trade_date: str) -> str:
-    """
-    冷区信号的两融占比分位（展示列，不参与信号规则）。
-
-    实证依据（docs/sentiment-data-evaluation.md）：2024-09~2026-09 的 583 条冷区信号中，
-    低分位组 20 日超额 −1.67pp / 胜率 36.9%，高分位组 +1.50pp / 51.2%，且 2025/2026 两年一致。
-    因此仅作展示与观察，暂不进入信号判定。
-    """
-    lines: List[str] = ["📊 **七、冷区信号资金面参考**（两融余额 / 流通市值分位）", ""]
-    try:
-        from src.signals.sentiment import percentile_series
-        pct = percentile_series(trade_date)
-    except Exception as e:
-        logger.warning("两融占比数据不可用: %s", e)
-        lines += [f"> ⚠️ 两融占比数据不可用：{e}", ""]
-        return "\n".join(lines)
-
-    if pct is None or len(pct) == 0:
-        lines += [f"> 尚无 {trade_date} 的两融占比数据（面板未覆盖该日）。", ""]
-        return "\n".join(lines)
-
-    # 当日冷区信号取自 module_02 结论 JSON（避免重算，保持与报告口径一致）
-    signals: List[dict] = []
-    try:
-        p = REPORTS_DIR / f"{trade_date}_module_02_conclusion.json"
-        if p.exists():
-            signals = json.loads(p.read_text(encoding="utf-8")).get("cold_zone_signals") or []
-    except Exception as e:
-        logger.warning("读取冷区信号失败: %s", e)
-
-    lines += [
-        "> 分位越高 = 杠杆资金参与越深。实证（583 条冷区信号，20 日超额）：",
-        "> 低分位 **−1.67pp / 胜率 36.9%**　中分位 +0.28pp / 47.1%　高分位 **+1.50pp / 51.2%**",
-        "> 仅作参考展示，尚未进入信号规则。",
-        "",
-    ]
-
-    if signals:
-        lines += [
-            "| 行业 | 级别 | 前20日均宽 | 两融占比分位 | 参考 |",
-            "|:-----|:----:|:----------:|:-----------:|:----:|",
-        ]
-        for s in signals:
-            v = pct.get(s.get("industry_code"))
-            has = v is not None and not pd.isna(v)
-            v_txt = f"{float(v) * 100:.0f}%" if has else "—"
-            tag = ("偏高" if float(v) >= 0.67 else "偏低" if float(v) <= 0.33 else "中性") if has else "—"
-            tier = _TIER_LABEL.get(str(s.get("tier")), str(s.get("tier", "")))
-            lines.append(
-                f"| {s.get('industry_name', '')} | {tier} "
-                f"| {_fmt(s.get('pre_breadth_20d'), '.0f', '%')} | {v_txt} | {tag} |"
-            )
-        lines.append("")
-    else:
-        names = _industry_names()
-        top = pct.nlargest(3)
-        bot = pct.nsmallest(3)
-        lines += [
-            f"> 今日无冷区信号。全行业两融占比分位中位数 **{pct.median() * 100:.0f}%**；"
-            f"最高：{'、'.join(names.get(c, c) for c in top.index)}；"
-            f"最低：{'、'.join(names.get(c, c) for c in bot.index)}",
-            "",
-        ]
-    return "\n".join(lines)
-
-
-# ── 组装与落盘 ────────────────────────────────────────────
-
-def format_width_state_section(trade_date: str) -> str:
-    """
-    八、宽度状态 —— **状态描述，不含预测**。
-
-    实证定位（2026-10-05 定稿，依据 docs/breadth-what-it-can-and-cannot-do.md）：
-      - 宽度 = 行业内收盘价站上 MA20 的个股占比；**滞后量**：价格(t−1)→宽度(t) +0.28，
-        宽度(t−1)→次日收益 +0.017 ⇒ **不能当天用**；半衰期 ≈6 个交易日 ⇒ 可靠的**状态读数**。
-      - **七个前瞻方向已测且为空**（横截面 alpha / 时点择时 / 风险预测 / 状态分位表 / 背离项 /
-        换构造 / 个股级经典形态，t 值均做重叠校正）⇒ 本节**只写当期事实与变化**，
-        ⛔ 不写预测、不作排序依据、不进台账。
-      - 与 20 日动量 rank 相关 +0.694；宽度 3 日扩张的行业清单与「3 日涨幅榜」仅 **12.8%** 重叠
-        ⇒ 它是一个**不同的筛子**，用途是"提示去看一眼"（服务 B 案：研究线索雷达）。
-    """
-    lines: List[str] = ["📏 **八、宽度状态**（**状态描述，不含预测**）", ""]
-    lines += [
-        "> 宽度 = 行业内**收盘价站上 MA20 的个股占比**。它是**滞后量**"
-        "（价格(t−1)→宽度(t) +0.28；宽度(t−1)→次日收益 +0.017）⇒ **不能当天用**；"
-        "半衰期 **≈6 个交易日** ⇒ 是可靠的**状态读数**。",
-        "> ⛔ **七个前瞻方向已测且为空**（横截面 alpha / 时点择时 / 风险预测 / 状态分位表 / "
-        "背离项 / 换构造 / 个股级经典形态）⇒ 本节**只写当期事实与变化**，不作排序依据、不进台账。",
-        "> 与 20 日动量 rank 相关 +0.694；下列清单与「3 日涨幅榜」仅 **12.8%** 重叠 ⇒ "
-        "它是一个**不同的筛子**，用途是「值得看一眼」。"
-        "依据 `docs/breadth-what-it-can-and-cannot-do.md`",
-        "",
-    ]
-    try:
-        df = pd.read_parquet(INDUSTRY_DAILY_FULL_PATH,
-                             columns=["date", "con_code", "breadth", "n_stocks"])
-        df["date"] = pd.to_datetime(df["date"])
-        df["breadth"] = pd.to_numeric(df["breadth"], errors="coerce")
-        df = df[pd.to_numeric(df["n_stocks"], errors="coerce").fillna(0) >= 10]
-        B = df.pivot(index="date", columns="con_code", values="breadth").sort_index().astype(float)
-        target = pd.Timestamp(trade_date)
-        if target not in B.index:
-            lines += [f"> ⚠️ 宽度表未覆盖 {trade_date}"
-                      f"（最新 {B.index.max():%Y-%m-%d}），本节跳过。", ""]
-            return "\n".join(lines)
-        t = int(B.index.get_loc(target))
-        if t < 20:
-            lines += ["> ⚠️ 历史不足 20 个交易日，本节跳过。", ""]
-            return "\n".join(lines)
-
-        agg = B.mean(axis=1).dropna()
-        cur = float(agg.loc[target])
-        hist = agg.iloc[max(0, t - 249): t + 1]
-        pct_rank = float((hist <= cur).mean())
-        day = B.iloc[t]
-        d5 = (day - B.iloc[t - 5]).dropna()
-        d20 = (day - B.iloc[t - 20]).dropna()
-        names = _industry_names()
-
-        lines += [
-            f"> **全市场宽度（131 行业等权均值）：{cur:.0%}**"
-            f"　近 {len(hist)} 个交易日分位 **{pct_rank:.0%}**"
-            f"　日变化 {float(day.mean() - B.iloc[t-1].mean()) * 100:+.1f}pp",
-            "",
-        ]
-
-        def _row(code, delta):
-            return (f"| {names.get(code, code)} | {float(day.get(code, float('nan'))):.0%} "
-                    f"| {float(delta) * 100:+.1f}pp |")
-
-        for title, series in (("宽度扩张最快（Δ5）", d5.nlargest(4)),
-                              ("宽度收缩最快（Δ5）", d5.nsmallest(4))):
-            lines += [f"> {title}　*（仅按变化幅度列出，非推荐、非排序）*", "",
-                      "| 行业 | 当前宽度 | Δ5 |", "|:-----|:--------:|:---:|"]
-            lines += [_row(c, v) for c, v in series.items()]
-            lines.append("")
-        lines += [
-            f"> Δ20 极值：扩张 {names.get(d20.idxmax(), d20.idxmax())} {d20.max() * 100:+.0f}pp｜"
-            f"收缩 {names.get(d20.idxmin(), d20.idxmin())} {d20.min() * 100:+.0f}pp",
-            "",
-        ]
-    except Exception as e:  # 任一环节异常都只降级为一行提示，绝不影响主报告
-        logger.warning("宽度状态章节渲染失败: %s", e)
-        lines += [f"> ⚠️ 宽度状态数据不可用：{e}", ""]
-    return "\n".join(lines)
-
+# 🔴 2026-10-06 已移除：八、宽度状态（随宽度预测用途弃用而退场；
+#    宽度仍作为**数据探针**保留在 market_data.py / check_data_completeness.py，
+#    依据 docs/plan/retirement-breadth-tracker-plan.md §2.3/§6）
 
 # ── 组装与落盘 ────────────────────────────────────────────
 
 def build_extra_sections(trade_date: str) -> str:
-    """渲染四~八五个附加章节（跟踪池 / 主线 / regime / 资金面参考 / 宽度状态），用分隔线与主报告衔接"""
+    """渲染附加章节（主线状态 / 行情 regime），用分隔线与主报告衔接。
+
+    🔴 2026-10-06：反转跟踪池、冷区资金面参考、宽度状态三节已随对应来源弃用而移除。
+    """
     parts = [
-        format_tracking_section(trade_date),
         format_mainline_section(trade_date),
         format_regime_section(trade_date),
-        format_margin_section(trade_date),
-        format_width_state_section(trade_date),
     ]
     blocks: List[str] = []
     for part in parts:

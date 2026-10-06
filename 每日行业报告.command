@@ -8,11 +8,14 @@
 #    2. scripts/compute_weighted_returns.py      行业市值加权涨跌幅
 #    3. scripts/build_industry_daily_full.py     等权行业日频聚合（nav_e 上游）
 #    4. scripts/update_industry_factor.py        拥挤度因子 ind_crowd
-#    5. scripts/industry_tracker.py              贝叶斯反转跟踪
-#    6. scripts/mainline_detector.py             主线探测
-#    7. scripts/regime_classifier.py             行情 regime
-#    8. scripts/build_nav_924.py                 行业走势主表（924 起累计净值）
-#    9. cron/industry_review_daily.py            日报（自带前置补齐 + 完备性检查兜底）
+#    5. scripts/mainline_detector.py             主线探测
+#    6. scripts/regime_classifier.py             行情 regime
+#    7. scripts/build_nav_924.py                 行业走势主表（924 起累计净值）
+#    8. cron/industry_review_daily.py            日报（自带前置补齐 + 完备性检查兜底）
+#
+#  🔴 2026-10-06：原第 5 步「scripts/industry_tracker.py 贝叶斯反转跟踪」已移除
+#     （装置零产出：生产门槛 Sₜ≥50 下 131 个行业命中 0 个；引擎自身事件 h=20 按日聚类 t=−2.87）。
+#     链路由九步变八步。依据 docs/plan/retirement-breadth-tracker-plan.md
 #
 #  成功后自动用系统文本编辑（TextEdit）打开当日报告；运行日志留存于 logs/。
 #  调试: DRY_RUN=1 bash 每日行业报告.command （只打印将执行的命令，不计算不写数据）
@@ -38,7 +41,7 @@ main() {
     PY="${PYTHON:-python3}"
 
     echo "══════════════════════════════════════════════════"
-    echo "  Industry Radar · 每日行业报告（完整版九步链）"
+    echo "  Industry Radar · 每日行业报告（完整版八步链）"
     echo "  $(date '+%Y-%m-%d %H:%M:%S')  日志: $LOG_FILE"
     echo "══════════════════════════════════════════════════"
 
@@ -92,15 +95,14 @@ main() {
     }
 
     START=$SECONDS
-    run_step "1/9 每日成分快照"           "$PY" "scripts/build_members_daily.py"
-    run_step "2/9 行业市值加权涨跌幅"     "$PY" "scripts/compute_weighted_returns.py"
-    run_step "3/9 等权行业日频聚合"       "$PY" "scripts/build_industry_daily_full.py" "--days" "60"
-    run_step "4/9 拥挤度因子 ind_crowd"    "$PY" "scripts/update_industry_factor.py"
-    run_step "5/9 贝叶斯反转跟踪"         "$PY" "scripts/industry_tracker.py"
-    run_step "6/9 主线探测"               "$PY" "scripts/mainline_detector.py"
-    run_step "7/9 行情 regime"            "$PY" "scripts/regime_classifier.py"
-    run_step "8/9 行业走势主表(924起)"     "$PY" "scripts/build_nav_924.py"
-    run_step "9/9 生成日报 ($TRADE_DATE)" "$PY" "cron/industry_review_daily.py" "--date" "$TRADE_DATE"
+    run_step "1/8 每日成分快照"           "$PY" "scripts/build_members_daily.py"
+    run_step "2/8 行业市值加权涨跌幅"     "$PY" "scripts/compute_weighted_returns.py"
+    run_step "3/8 等权行业日频聚合"       "$PY" "scripts/build_industry_daily_full.py" "--days" "60"
+    run_step "4/8 拥挤度因子 ind_crowd"    "$PY" "scripts/update_industry_factor.py"
+    run_step "5/8 主线探测"               "$PY" "scripts/mainline_detector.py"
+    run_step "6/8 行情 regime"            "$PY" "scripts/regime_classifier.py"
+    run_step "7/8 行业走势主表(924起)"     "$PY" "scripts/build_nav_924.py"
+    run_step "8/8 生成日报 ($TRADE_DATE)" "$PY" "cron/industry_review_daily.py" "--date" "$TRADE_DATE"
 
     # ── 结果汇总 ─────────────────────────────────────────
     REPORT="$DATA_DIR/reports/daily-analysis/${TRADE_DATE}_industry_review.md"

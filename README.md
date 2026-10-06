@@ -37,14 +37,13 @@ scripts/build_members_daily.py  ← 日更：按交易日历展开每日快照
         scripts/build_industry_daily_full.py     等权行业日频聚合（nav_e 上游）
         scripts/update_industry_factor.py        拥挤度因子 ind_crowd
                       ▼
-        scripts/industry_tracker.py              贝叶斯反转跟踪引擎（六阶段生命周期）
         scripts/mainline_detector.py             主线探测器（方向群聚类）
         scripts/regime_classifier.py             行业 regime 分类
                       ▼
         scripts/build_nav_924.py                 行业走势主表（924 起累计净值/相对强度/动量）
                       ▼
         cron/industry_review_daily.py            日频编排入口（自动补齐前置数据）
-        └─ src/daily_review/module_02_industry.py  复盘模块二·三区框架（冷区/中区/热区）
+        └─ src/daily_review/module_02_industry.py  复盘模块二（当日行业数据状态）
         └─ scripts/check_data_completeness.py    数据完备性检查（防静默缺数）
                      ▼
         reports/daily-analysis/YYYY-MM-DD_industry_review.md
@@ -101,7 +100,8 @@ make help       # 列出全部目标
 - **单一配置源**：`config/config.yaml`，可用环境变量 `INDUSTRY_RADAR_DATA` 覆盖数据根目录，默认 `/Users/hyc/quant-data`
 - 数据读写全部经 `src/paths.py`，**禁止**硬编码 `/opt/data` 容器路径
 - 输入：`market/daily/*.parquet`、`daily_basic/*.parquet`（由现有 openclaw tushare-daily-fetch 任务每日 16:16 更新，本项目不重复拉取）
-- 输出：`industry/*.parquet`、`factors/ind_crowd_turnover_daily.parquet`、`industry/tracker_state.json`、`reports/daily-analysis/*.md`、`signals/signals_log.parquet`（信号台账）、`signals/eval_*.md`（评估报告）、`signals/industry_margin_daily.parquet`（两融占比面板缓存）
+- 输出：`industry/*.parquet`、`factors/ind_crowd_turnover_daily.parquet`、`reports/daily-analysis/*.md`、`signals/signals_log.parquet`（信号台账）、`signals/eval_*.md`（评估报告）、`signals/industry_margin_daily.parquet`（两融占比面板缓存，**2026-10-06 起不再对外呈现**）
+- ⚠️ `industry/tracker_state.json` **2026-10-06 起不再产出**（反转跟踪系统已删除）；`scripts/sync_industries_to_futu.py`（人工同步入口，主人拍板保留）仍读该文件 ⇒ 该脚本目前**无输入可用**，恢复需先重建跟踪池
 
 ## 用法
 
@@ -140,7 +140,6 @@ python3 scripts/build_members_daily.py                 # 日更：每日成分�
 python3 scripts/compute_weighted_returns.py            # 日更：加权涨跌幅（circ_mv 加权，按日期 upsert）
 python3 scripts/build_industry_daily_full.py --days 60 # 日更：等权行业日频聚合（MA20/13 预热需 ≥33 天）
 python3 scripts/update_industry_factor.py              # 日更：拥挤度因子
-python3 scripts/industry_tracker.py                    # 日更：反转跟踪
 python3 scripts/mainline_detector.py                   # 日更：主线探测
 python3 scripts/regime_classifier.py                   # 日更：行情类型 regime
 python3 scripts/build_nav_924.py                       # 日更：行业走势主表（924 起净值/相对强度/动量）
@@ -148,7 +147,6 @@ python3 cron/industry_review_daily.py                  # 日更：行业跟踪�
 
 bash scripts/run_daily_scheduled.sh                    # 定时入口：交易日/就绪/幂等判断 + 静默执行 + 结果告警
 python3 scripts/check_data_completeness.py             # 检查：数据完备性（防静默缺数，可单独跑）
-python3 scripts/build_signals_log.py --backfill-cold-zone  # 首次：全历史回填冷区信号台账（约 1~3 分钟）
 python3 scripts/build_signals_log.py                   # 日更：当日信号快照 + 前向收益回填（cron 已自动执行）
 python3 scripts/evaluate_signals.py                    # 评估：事件研究（超额/胜率/t值，按档位/年份/regime）
 python3 scripts/pull_futu_industry.py                  # 周更：富途行业成员快照（限频 30s/10次，约10分钟）
@@ -187,21 +185,23 @@ cron 入口检测到 `1` 会以非零码退出，避免缺数被静默吞掉。
   带 `in_date/out_date`），按**当日真实成分**聚合以消除前视偏差；`industry_members.parquet` 仅作行业全集/名称字典
 - **加权口径**：`circ_mv`（流通市值）加权，与通达信 881xxx / 申万官方行业指数同口径；
   实测对标通达信官方点位平均绝对误差 ~0.10pp（总市值口径为 ~0.14pp）
-- 复盘模块二三区框架：冷区（宽度<阈值，宽度反转信号）/ 中区 / 热区（待实现信号挖掘）
-- ⛔ **信号定位**（2026-10-01 起）：冷区宽度反转信号已**降级为「观察项」** ——
-  保留入账、展示与统计以积累样本，但**不作为交易依据、不得据此调参**（依据：17 个候选过滤器
-  在样本外全部衰减，IS↔OOS 相关仅 +0.18）。`tracker_pool` / `mainline` 为「待观察」（仅向前样本）。
-  代码唯一真相来源 = `src/signals/sources.py` 的 `SOURCE_SPECS[*]["status"]`。
-  详见 `docs/changes-2026-10-01-cold-zone-downgrade.md`
-- 📐 **宽度指标能做什么 / 不能做什么** → `docs/breadth-what-it-can-and-cannot-do.md`：
+- 🚫 **复盘模块三区框架已退场（2026-10-06）**：冷区 / 中区 / 热区（`format_cold_zone_section`）连同
+  反转跟踪系统一并拆除，日报不再输出该章节。历史证据见 `docs/archive/`
+- 🚫 **信号定位**（2026-10-06 起）：宽度反转（`cold_zone`）与反转跟踪池（`tracker_pool`）均标记
+  **`retired` = 🚫 已弃用**，台账条目保留仅供追溯，**不可作决策依据**。`mainline` 为「待观察」（仅向前样本）。
+  代码唯一真相来源 = `src/signals/sources.py` 的 `SOURCE_SPECS[*]["status"]`（状态写在此处，
+  **不进台账 schema**，避免第二个真相源）。弃用依据见 `docs/plan/retirement-breadth-tracker-plan.md`
+- 📐 **宽度指标能做什么 / 不能做什么** → `docs/archive/breadth-what-it-can-and-cannot-do.md`：
   **七个方向已测且为空**（横截面 alpha / 时点择时 / 风险预测 / 状态分位表 / 背离项 / 换构造 /
   个股级经典形态，t 值均已做重叠校正），**不得重复**；宽度是**滞后状态量**（半衰期 ≈5 日，
-  与 20 日动量 rank 相关 **+0.694**）⇒ 只做**当期描述 + 注意力分流 + 数据监控**，⛔ 不做预测
-- 反转跟踪：Sₜ = Sₜ₋₁ × λₜ，S₀ = C1(宽度) × C3(涨幅)，C0/C2/C4 已废弃（2026-08-02）
-- 生命周期（**六阶段，以 `industry_tracker.py` 为准**）：沉睡 → 早期(唤醒) → 成长(R<8%) →
-  成熟(R≥8% 不可逆) → 预警(2-of-4，或保底：MA5 下穿 MA21 持续 2 天且间距>0.5%) →
-  衰退(死叉确认)。跟踪池只统计其中 4 个态（early/growing/mature/alarming），
-  `sleeping`/`decaying` 是进出态，不计入跟踪数
+  与 20 日动量 rank 相关 **+0.694**）⇒ 只做**当期描述 + 注意力分流 + 数据监控**，⛔ 不做预测。
+  🚫 **2026-10-06 起「宽度状态」章节已从日报删除**（`format_width_state_section` 一并移除）；
+  `industry_daily_full.breadth` 列**保留为数据探针**（仅用于 `BREADTH_ZERO` 零值判据），不再对外呈现
+- 🔴 **反转跟踪系统已删除**（2026-10-06，`scripts/industry_tracker.py` 原 996 行 + `factor_width_reversal.py`
+  原 207 行）：Sₜ = Sₜ₋₁ × λₜ 递推与六阶段生命周期判定一并退场
+- ~~生命周期（六阶段）：沉睡 → 早期(唤醒) → 成长(R<8%) → 成熟(R≥8% 不可逆) → 预警(2-of-4，
+  或保底：MA5 下穿 MA21 持续 2 天且间距>0.5%) → 衰退(死叉确认)~~ 🚫 **已随反转跟踪系统退场（2026-10-06）**，
+  原实现文件 `scripts/industry_tracker.py` 已删除；设计文档存 `docs/archive/tracker-design-and-issues.md`
 - 主线择时（**以 `mainline_detector.py` 为准**）：方向群由**相关系数聚类**自动生成
   （`cluster_industries(corr_threshold=0.6)`，群数与成员随数据变化，**不是固定 31 个申万一级群**）；
   主线判据 = 热度 ≥1.3x **且** 20 日超额 ≥0.3%/日 **且** 20 日超额胜率 ≥0.6；

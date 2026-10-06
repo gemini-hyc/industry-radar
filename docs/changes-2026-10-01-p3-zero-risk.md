@@ -44,7 +44,7 @@
 | `src/signals/sources.py` | `cold_zone_history` 新增同名透传参数，默认值同上 |
 
 > 这两个开关的意义：把「文档口径」与「生产口径」变成**可切换的一次调用**，
-> 让口径之争从此可以用数据回答，而不是靠读文档猜。见 `docs/changes-2026-10-01-cold-zone-ab.md`。
+> 让口径之争从此可以用数据回答，而不是靠读文档猜。见 `docs/archive/changes-2026-10-01-cold-zone-ab.md`。
 
 ---
 

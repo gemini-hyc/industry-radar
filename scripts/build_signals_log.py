@@ -4,10 +4,11 @@
 
 用法:
   python3 scripts/build_signals_log.py                       # 每日：当日快照 + 回填前向收益
-  python3 scripts/build_signals_log.py --backfill-cold-zone  # 首次：全历史回填冷区信号（约 1~3 分钟）
-  python3 scripts/build_signals_log.py --backfill-cold-zone --start 2020-01-01 --end 2026-09-23
   python3 scripts/build_signals_log.py --no-snapshot         # 只回填收益，不采集当日快照
   python3 scripts/build_signals_log.py --out /tmp/x.parquet  # 覆盖台账路径（测试用）
+
+🔴 2026-10-06弃用：`--backfill-cold-zone` 全历史回填入口已移除（冷区信号退场）。
+   台账中 2,234 条 cold_zone 历史保留仅为可追溯，不再新增。
 """
 import argparse
 import sys
@@ -18,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pandas as pd  # noqa: E402
 
 from src.signals import ledger as L  # noqa: E402
-from src.signals.sources import cold_zone_history, snapshot_signals  # noqa: E402
+from src.signals.sources import snapshot_signals  # noqa: E402
 
 
 def _latest_trade_date() -> str:
@@ -45,12 +46,6 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="信号台账构建与维护")
     ap.add_argument("--date", default=None,
                     help="快照日期 YYYY-MM-DD（默认最近一个交易日，避免非交易日写坏信号日）")
-    ap.add_argument("--backfill-cold-zone", action="store_true",
-                    help="全历史回填冷区宽度反转信号（首次建账用）")
-    ap.add_argument("--start", default=None, help="冷区回填起点 YYYY-MM-DD")
-    ap.add_argument("--end", default=None, help="冷区回填终点 YYYY-MM-DD")
-    ap.add_argument("--no-crowding", action="store_true", help="回填时不聚合拥挤度特征（更快）")
-    ap.add_argument("--no-margin", action="store_true", help="回填时不附带两融占比分位特征")
     ap.add_argument("--no-snapshot", action="store_true", help="跳过当日快照采集")
     ap.add_argument("--no-backfill-returns", action="store_true", help="跳过前向收益回填")
     ap.add_argument("--out", default=None, help="台账路径（默认 <数据根>/signals/signals_log.parquet）")
@@ -59,17 +54,13 @@ def main() -> int:
     obs_date = args.date or _latest_trade_date()
 
     rows = []
-    if args.backfill_cold_zone:
-        print(f"🔁 全历史回填冷区信号：{args.start or '最早'} → {args.end or '最新'} …")
-        cz = cold_zone_history(start=args.start, end=args.end,
-                               with_crowding=not args.no_crowding,
-                               with_margin=not args.no_margin)
-        print(f"   冷区信号 {len(cz)} 条")
-        rows += cz
+    # 🔴 2026-10-06 弃用：冷区全历史回填入口（`--backfill-cold-zone/--start/--end/
+    #    --no-crowding/--no-margin`）已移除。冷区信号退场，台账中2,234 条历史保留但不再新增。
+    #    依据 docs/plan/retirement-breadth-tracker-plan.md §2.2。
 
     if not args.no_snapshot:
         snap = snapshot_signals(obs_date)
-        print(f"📸 {obs_date} 快照：{len(snap)} 条（跟踪池入场事件 + 主线成员状态）")
+        print(f"📸 {obs_date} 快照：{len(snap)} 条（主线成员状态）")
         rows += snap
 
     ledger = L.load_ledger(args.out)

@@ -27,6 +27,7 @@ from _common import (
     LEDGER_VALID_SOURCES,
     RANGE_CONSTRAINTS,
     REGIME_VALID_LABELS,
+    TOLERATED_MISSING,
     TOP5_CONC_NEG_UP_PCT_MAX,
     UNDER_TEST,
     C,
@@ -69,15 +70,30 @@ class TestArtifactSchema(unittest.TestCase):
 
     def test_columns_exact_set(self):
         bad = []
+        tolerated_notes = []
         for name, expected in EXPECTED_COLUMNS.items():
             path = UNDER_TEST[name]
             if not path.exists():
                 continue
             actual = _read_columns_fast(path)
-            if set(actual) != set(expected):
-                missing = sorted(set(expected) - set(actual))
-                extra = sorted(set(actual) - set(expected))
+            allowed = TOLERATED_MISSING.get(name, {})
+            # 白名单只吃掉「允许缺失」的列，其余（缺或多）一律仍算失败
+            hard_expected = set(expected) - set(allowed)
+            if set(actual) != set(hard_expected):
+                missing = sorted(set(hard_expected) - set(actual))
+                extra = sorted(set(actual) - set(hard_expected))
                 bad.append(f"{name}: 缺 {missing} | 多 {extra}")
+            # 白名单命中项单独记录：产物一旦补上就不该再报
+            still_missing = sorted(set(allowed) & set(expected) - set(actual))
+            if still_missing:
+                tolerated_notes.extend(
+                    f"    {name}.{c} — {allowed[c]}" for c in still_missing
+                )
+        if tolerated_notes:
+            print(f"  {C.WARN}ℹ️  以下列在EXPECTED_COLUMNS 中但本机产物尚缺（已按白名单豁免，"
+                  f"属产物滞后而非口径变更）：{C.END}")
+            for line in tolerated_notes:
+                print(line)
         self.assertFalse(
             bad,
             "列集合与 EXPECTED_COLUMNS 不符（改口径请同步更新 tests/_common.py）：\n  "
@@ -181,11 +197,9 @@ class TestIndustryUniverse(unittest.TestCase):
             s = set(load(name)[col])
             if s != ref:
                 bad.append(f"{name}.{col}: 缺 {sorted(ref - s)[:5]} | 多 {sorted(s - ref)[:5]}")
-        tr = UNDER_TEST["tracker_report"]
-        if tr.exists():
-            s = set(pd.read_csv(tr)["code"])
-            if s != ref:
-                bad.append(f"tracker_report.code: 缺 {sorted(ref - s)[:5]} | 多 {sorted(s - ref)[:5]}")
+        # 🔴 2026-10-06：tracker_report 的行业全集断言随跟踪池弃用一并移除
+        #    （装置零产出、脚本与产物在第 2/5 批清理）。依据
+        #    docs/plan/retirement-breadth-tracker-plan.md §2.4。
         self.assertFalse(bad, "行业集合不一致（口径分裂）：\n  " + "\n  ".join(bad))
 
 

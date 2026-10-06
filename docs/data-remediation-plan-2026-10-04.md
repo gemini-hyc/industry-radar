@@ -286,7 +286,7 @@ python3 scripts/evaluate_signals.py
 **额外代价**：缓存只 80 天 vs `daily_full` 1636 天 ⇒ **日报拿不到长历史**（`:563` 请求 `days=80`）。
 
 **处置**（顺序重要）：
-1. **本机**：把 `module_02` 的取数改到 `industry_daily_full.parquet`（**不动其报告口径**，符合铁律 ②）。
+1. **本机**：把 `module_02` 的取数改到 `industry_daily_full.parquet`（~~不动其报告口径，符合铁律②~~ —— 🟢 **该约束 2026-10-06 已解除**，报告将重构）。
    ⚠️ 改前须做公平对照：`avg_pct`/`n_stocks` 应零差异；`breadth` 会有差异（缓存坏值 + 语义漂移），属**修正**。
 2. **源端**：重算 §4 第 ③ 步后生效。
 3. ⚠️ **不要**再让 Hermes 那份 `industry_daily.parquet` 参与任何生产读取。

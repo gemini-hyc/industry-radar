@@ -53,7 +53,7 @@ STATS_COLUMNS: dict[str, list[str]] = {
     "industry_weighted_returns": ["weighted_pct", "circ_mv", "stock_n"],
     "daily_regime": ["up_pct", "mean_ret", "std_ret", "top5_conc", "rank_consistency"],
     "industry_nav_924": ["nav_w", "nav_e", "nav_hs300", "rs_w"],
-    "tracker_report": ["S0", "score", "days"],
+    # 🔴 2026-10-06：tracker_report 的快照字段随跟踪池弃用一并移除
 }
 
 
@@ -105,8 +105,7 @@ def collect() -> dict:
             entry["n_industries"] = int(df[icol].nunique())
         if name == "daily_regime" and "regime" in df.columns:
             entry["by_label"] = {str(k): int(v) for k, v in df["regime"].value_counts().items()}
-        if name == "tracker_report" and "status" in df.columns:
-            entry["by_status"] = {str(k): int(v) for k, v in df["status"].value_counts().items()}
+        # 🔴 2026-10-06：tracker_report 的 by_status 分布随跟踪池弃用一并移除
         if name == "mainline_detection" and "is_mainline" in df.columns:
             entry["n_mainline"] = int(df["is_mainline"].astype(bool).sum())
         stats = {}

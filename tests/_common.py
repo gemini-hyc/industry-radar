@@ -77,16 +77,33 @@ EXPECTED_COLUMNS: dict[str, list[str]] = {
         # B1/D2（2026-10-04 跨期稳定性约束）新增 —— 改 mainline 口径时连同这三列一起维护
         "is_mainline_raw", "consec_days", "min_consecutive_days",
     ],
-    "tracker_report": [
-        "code", "name", "status", "phase", "signal_date", "S0", "score",
-        "entry_confidence", "days", "last_date", "elim_reason",
-    ],
     "signals_log": [
         "signal_date", "source", "obs_type", "ind_code", "ind_name", "score",
         "tier", "features", "logged_at",
         "fwd_ret_5", "fwd_ret_10", "fwd_ret_20", "fwd_ret_60",
         "fwd_excess_5", "fwd_excess_10", "fwd_excess_20", "fwd_excess_60",
     ],
+}
+
+# ──────────────────────────────────────────────────────────────────────
+# 允许缺失的列（白名单）—— 只豁免「**本机产物滞后于代码**」这一个原因
+# ──────────────────────────────────────────────────────────────────────
+# ⚠️ **不要用白名单掩盖真正的口径变更**：白名单只解决"代码已加列、本机产物还没重跑"
+#    这一种情况；**新增/删除任何其他列仍会硬失败**。
+#
+# 为什么需要它：`mainline_detection.csv` 在本机停在 2026-09-30 的旧版，
+#   而 B1/D2 的三列已由 `mainline_detector.py:303-305` 产出（2026-10-04 上线）。
+#   本机数据根是源端的只读副本，同步已暂停 ⇒ 产物不会自己变新。
+#   直接从EXPECTED_COLUMNS 删掉三列会让测试**永久失明**：源端重跑后新列出现也不报警。
+#
+# 🔴 源端重跑后应**回到严格模式**：把下面对应条目清空，
+#    让 test_columns_exact_set 恢复硬断言（验收标准：产物 mtime > 2026-10-04）。
+TOLERATED_MISSING: dict[str, dict[str, str]] = {
+    "mainline_detection": {
+        "is_mainline_raw": "B1/D2 2026-10-04 上线；本机产物停在 2026-09-30，源端重跑后应清空此项",
+        "consec_days": "同上",
+        "min_consecutive_days": "同上",
+    },
 }
 
 # 被测产物 → 文件路径。以 ARTIFACTS 登记表为真相来源（铁律：新增产物必须登记）。

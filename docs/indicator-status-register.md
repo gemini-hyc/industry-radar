@@ -3,12 +3,18 @@
 > **本页的用途**：下一轮的入口。回答"项目里有哪些想用来预测的东西、各自验证到什么程度、
 > 依据在哪"——省掉每次重新侦察。
 >
+> 🟢 **[2026-10-06 弃用已生效]** 宽度预测用途与 `tracker_pool` 装置**已弃用**：
+> `cold_zone` / `tracker_pool` 状态改为 `retired`（历史行保留仅为可追溯），
+> 反转跟踪脚本与日报三章节已删除。**`breadth` 列仍保留为数据探针**（防全零静默事故）。
+> 依据 `docs/plan/retirement-breadth-tracker-plan.md`。
+>
 > **本页的定位**：**只做索引与状态汇总，不是真相源**。冲突时一律以下列源为准：
 >
 > | 关心的东西 | 真相源 |
 > |---|---|
-> | 信号定位（生效/观察项/待观察） | `src/signals/sources.py` 的 `SOURCE_SPECS[*]["status"]` |
-> | 宽度/冷区的全部结论 | `docs/breadth-what-it-can-and-cannot-do.md` |
+> | 信号定位（生效/观察项/**待观察**/**🚫已弃用**） | `src/signals/sources.py` 的 `SOURCE_SPECS[*]["status"]` |
+> | 统计推断口径（聚类 t / 非重叠 t / 聚类稳健 OLS） | `src/evaluation/inference.py`（全项目唯一实现处） |
+> | 宽度/冷区的全部结论 | `docs/archive/breadth-what-it-can-and-cannot-do.md` |
 > | 已证伪方向 | `docs/system-audit-and-roadmap.md` §4 |
 > | 待办与待拍板 | `docs/action-items.md` |
 > | 数据侧处置 | `docs/data-remediation-plan-2026-10-04.md` |
@@ -55,8 +61,8 @@
 
 | 指标 | 位置 | 意图 | 状态 | 依据 |
 |---|---|:--:|:--:|---|
-| `cold_zone` 冷区宽度反转 | `sources.py:56-68` | 预测 | ⛔ **已证伪** | 事件级 2,122 个：h=20 均值 +0.384 / **中位 +0.024** / 为正 **50.4%**；朴素 t=+2.75 → **按日聚类 −0.13**；修正口径复核一致 ✅ |
-| `tracker_pool` 反转跟踪池 | `sources.py:69-76` | 预测 | ⛔ **观察项**（2026-10-05 起） | 从未正式评估。**2026-10-05 定向证伪（引擎真实事件）：入场事件前瞻超额显著为负** —— entry 3,917 事件 h=20 均值 **−0.219pp**/中位 **−0.583pp**/为正 46%/按日 **t=−2.87**、IS **−0.79** OOS **−3.39** 同号；金叉确认同负（h=20 按日 −2.27）；R≥8% 与预警样本过少（207/59）功效不足 —— (a) 金叉确认 h=60 均值 **−0.72pp**/为正 42%；(b) **R≥8%（核心假设）** 均值从未 \|t\|>2 且**中位数全负**（h=20 −0.707）、IS 正 OOS 负；(c) A1/A3/A4 中 A3/A4 仅微弱负向（0.08~0.20pp，低于成本）。详见 `docs/tracker-design-and-issues.md` §8.1 |
+| ~~`cold_zone`~~ 冷区宽度反转 | `sources.py`（**条目保留，标 `retired`**） | 预测 | 🚫 **已弃用**（原 ⛔ 已证伪） | 事件级 2,122 个：h=20 均值 +0.384 / **中位 +0.024** / 为正 **50.4%**；朴素 t=+2.75 → **按日聚类 −0.13** ✅。**2026-10-06 弃用**：信号退场、报告章节删除，历史 2,234 行标 `retired` 保留 |
+| ~~`tracker_pool`~~ 反转跟踪池 | `sources.py`（**条目保留，标 `retired`**） | 预测 | 🚫 **已弃用**（原 ⛔ 观察项） | 从未正式评估。**2026-10-05 定向证伪（引擎真实事件）：入场事件前瞻超额显著为负** —— entry 3,917 事件 h=20 均值 **−0.219pp**/中位 **−0.583pp**/为正 46%/按日 **t=−2.87**、IS **−0.79** OOS **−3.39** 同号；金叉确认同负（h=20 按日 −2.27）；R≥8% 与预警样本过少（207/59）功效不足 —— (a) 金叉确认 h=60 均值 **−0.72pp**/为正 42%；(b) **R≥8%（核心假设）** 均值从未 \|t\|>2 且**中位数全负**（h=20 −0.707）、IS 正 OOS 负；(c) A1/A3/A4 中 A3/A4 仅微弱负向（0.08~0.20pp，低于成本）。详见 `docs/archive/tracker-design-and-issues.md` §8.1。**2026-10-06 弃用**：脚本（996 行）与产物已清理，历史 21 行标 `retired` 保留 |
 | `mainline` 主线方向成员 | `sources.py:77-84` | 预测 | ⏳ **待观察** | 从未评估。⚠️ **语义基础已被证伪**：判据依赖成交额热度，而资金/成交额被证**滞后于价格** ✅ |
 
 ---
@@ -65,11 +71,11 @@
 
 | 装置 | 位置 | 意图 | 状态 | 依据 |
 |---|---|:--:|:--:|---|
-| **反转跟踪** | `scripts/industry_tracker.py` | 预测 | ⏳ **待观察** | 未评估。**设计原理与问题清单见 [`docs/tracker-design-and-issues.md`](tracker-design-and-issues.md)**；内部组件见 §2.1 |
+| ~~**反转跟踪**~~ | 🔴 **已删除**（原 `scripts/industry_tracker.py`，996 行） | 预测 | 🚫 **已弃用（装置拆除）** | 引擎自身 entry 事件 h=20 均值 **−0.219pp**、按日聚类 **t=−2.87**，IS/OOS 同号 ⇒ 前提被**反驳**；且生产门槛 Sₜ≥50 下131 行业**命中 0 个** 📄；清理依据 `docs/plan/retirement-breadth-tracker-plan.md` |
 | **主线探测** | `scripts/mainline_detector.py` | 预测 | ⏳ **待观察** | 判据做过 A/B（D12–D14 修了前视/误判），但**"能预测"从未检验** ⚙️ |
 | **行情分类** | `scripts/regime_classifier.py` | 预测→已降级 | 📐 **描述性** | `rank_consistency` 对次日延续性 **r=−0.029** ⇒ 只作状态描述 📄 |
 | **净值主表** | `scripts/build_nav_924.py` | 排序 | 📐 **描述性** | 20 日相对强度对未来 \|t\|<2 📄；我实测动量重叠校正后 \|t\|≤1.9 ✅ |
-| **宽度状态** | `src/utils/market_data.py` → `industry_daily_full.breadth` | 预测→已降级 | 📐 **描述性** | **七个前瞻方向全空**；半衰期 ≈5 日；与 20 日动量 rank corr **+0.694** ✅ |
+| ~~**宽度状态**~~（报告章节） | ~~`report_sections.format_width_state_section`~~ | 预测→报告章节 | 🚫 **已弃用（章节删除）** | 七个前瞻方向全空；2026-10-06 随宽度预测用途弃用而从日报移除。⛔ **但 `breadth` 列本身保留为数据探针**（见下） |
 
 ### 2.1 反转跟踪的内部组件（逐个都还没被单独检验）
 
@@ -120,7 +126,7 @@
 |---|---|:--:|:--:|---|
 | **拥挤度** `ind_crowd`（换手率） | `scripts/update_industry_factor.py` → `factors/ind_crowd_turnover_daily.parquet` | 预测 | ⛔ **已证伪** | 对未来的 \|t\| 全 < 2 ✅ |
 | **资金流**（主力净流入/超大单） | `moneyflow/` | 预测 | ⛔ **已证伪（且反向）** | 资金是价格的**滞后跟随**：`IC(wret_{t−k}→main_int_t)` 显著为负；"连续 3 日转正"事件 937 次，未来 5/10/20 日方向为负且不显著 ✅ |
-| **两融占比分位** | `src/signals/sentiment.py` → 日报"七"章节 | 过滤 | ⛔ **随冷区失效** | 它是**冷区信号之上的条件分组**（N=583，低分位 −1.67pp / 高分位 +1.50pp）📄；冷区已无预测力 ⇒ 过滤器随之失效；且 t 未做重叠校正 ⚙️ |
+| **两融占比分位** | `src/signals/sentiment.py` → ~~日报"七"章节~~ | 过滤 | 🚫 **随冷区失效 + 章节已删** | 它是**冷区信号之上的条件分组**（N=583，低分位 −1.67pp / 高分位 +1.50pp）📄；冷区已无预测力 ⇒ 过滤器随之失效；且 t 未做重叠校正 ⚙️ |
 | **龙虎榜 / 大宗 / 北向 / 南向** | `daily_regime.parquet` 的 6 列（`lhb_*` / `block_*` / `north_*` / `south_*`） | 状态 | ⚪ **未评估** | 只被聚合进 regime 表；且 `hsgt_top10` 2024-08-19 后 `net_amount` 为 None（**名存实亡**）📄 |
 | **regime 24 列** | `daily_regime.parquet` | 状态 | 📐 描述性 | 见 §2；8 类之间的区分度到 20 日超额极差 3.6pp，但**对未来的预测力为零** 📄 |
 | **净值/相对强度/动量** | `industry_nav_924.parquet`：`nav_w/nav_e`、`rs_w`、`mom20_w/mom60_w` | 排序 | 📐 描述性 | 见 §2 |
@@ -189,9 +195,11 @@
 
 ## 8. 下一轮入口：建议顺序
 
-> ⚠️ **两条已裁决的退场**：`cold_zone`（2026-10-01）与 `tracker_pool`（2026-10-05）均已降级为观察项。
-> **弃用清理计划的可行性审查**（含 4 条必补 + 5 项调整 + 行号核对表）见
-> [`docs/plan/retirement-breadth-tracker-review.md`](plan/retirement-breadth-tracker-review.md)。
+> 🚫 **两条来源已彻底弃用（2026-10-06）**：`cold_zone` 与 `tracker_pool` 均标记 `status = "retired"`，
+> **实现与报告章节已删除**，台账历史行仅供追溯。演进：10-01 降级为观察项 → 10-05 `tracker_pool` 证伪
+> → 10-06 连同冷区一并弃用（硬证据：交互项 −0.01pp ≈ 0、中位数 −0.13pp 与均值 +0.34pp 反号）。
+> 弃用清理计划见 [`docs/plan/retirement-breadth-tracker-plan.md`](plan/retirement-breadth-tracker-plan.md)，
+> 可行性审查见 [`docs/archive/retirement-breadth-tracker-review.md`](archive/retirement-breadth-tracker-review.md)。
 
 
 1. ✅ **台账评估器已修（2026-10-05）**：事件级去重 + 按日聚类 t（主判据）+ 非重叠 t + 强制中位数；
@@ -199,8 +207,8 @@
 2. **把未提交的抗复发资产纳入版本控制**：`src/research/breadth_eval.py`、`tests/test_breadth_signal.py`
    （目前是 untracked ⇒ 没有版本保护）。
 3. **口径收尾**：源端同步 → 重建全历史 PIT → 重跑 `industry_daily_full`（⚠️ 见 §7 末）。
-4. ✅ **`tracker_pool` 已评并降级为观察项**（2026-10-05，见 `docs/changes-2026-10-05-tracker-pool-downgrade.md`）；
-   ⏳ **`mainline` 仍待评**（唯一未评估的入账来源）——若不过，与 `cold_zone` 一并归档。
+4. ✅ **`tracker_pool` 已评、证伪并弃用**（10-05 证伪 → 10-06 弃用，见 `docs/changes-2026-10-05-tracker-pool-downgrade.md`）；
+   ⏳ **`mainline` 仍待评**（唯一未评估的入账来源）——若不过，即为第三条弃用来源。
 5. **中区/热区**（§3）：要么按门槛实现并入账，要么在文档里标"永久不做"，避免半成品长期占据"待实现"。
 6. **景气/估值层**（§5）：按方法论 §9 的顺序走（先建表 → 入账 → 评估），**不要在评估器修好之前做**。
 
@@ -212,18 +220,245 @@
 |---|---|
 | 三个信号来源及其定位 | `src/signals/sources.py:56-84` |
 | 前瞻窗口唯一实现（防次序错误） | `src/signals/ledger.py:174` + `src/utils/forward.py` |
-| 弃用宽度+跟踪池的清理计划审查 | `docs/plan/retirement-breadth-tracker-review.md` |
+| 弃用宽度+跟踪池的清理计划审查 | `docs/archive/plan/retirement-breadth-tracker-review.md` |
 | 评估器推断口径修正（朴素 t → 聚类 t） | `docs/changes-2026-10-05-eval-inference-caliber.md` |
-| 反转跟踪池的设计原理与 8 个设计问题 | `docs/tracker-design-and-issues.md` |
-| `tracker_pool` 降级为观察项（定位变更记录） | `docs/changes-2026-10-05-tracker-pool-downgrade.md` |
+| 反转跟踪池的设计原理与 8 个设计问题 | `docs/archive/tracker-design-and-issues.md` |
+| `tracker_pool` 降级为观察项（10-05 定位变更记录）→ **已弃用** | `docs/changes-2026-10-05-tracker-pool-downgrade.md` |
 | 🆕 宽度评估的唯一口径 | `src/research/breadth_eval.py`（**未提交**；已正确复用 `forward_sum`） |
-| 宽度七方向全空 | `docs/breadth-what-it-can-and-cannot-do.md` §二 |
+| 宽度七方向全空 | `docs/archive/breadth-what-it-can-and-cannot-do.md` §二 |
 | 冷区×扩张交互项（含中位数与聚合敏感性） | 同上 §十二、§十三 |
 | 个股级"买未站上 MA20"检验 | 同上 §十一 |
 | 半衰期语义与四个用法 | 同上 §十 |
 | 宽度口径缺陷与修正 | 同上 §六、§九 |
 | 前瞻窗口事故（三次同类错误） | `docs/changes-2026-10-05-breadth-window-bug.md` |
-| 冷区降级依据（17 候选） | `docs/changes-2026-10-01-cold-zone-downgrade.md` |
+| 冷区降级依据（17 候选） | `docs/archive/changes-2026-10-01-cold-zone-downgrade.md` |
+| 已证伪清单 | `docs/system-audit-and-roadmap.md` §4 |
+| P0-2 静默坏值 | `docs/changes-2026-10-03-daily-full-breadth-anomaly.md` |
+| 防复发测试 | `tests/test_forward_returns.py`（7 项）+ `tests/selftest.py` 第③④节 |
+
+>
+> | 关心的东西 | 真相源 |
+> |---|---|
+> | 信号定位（生效/观察项/**待观察**/**🚫已弃用**） | `src/signals/sources.py` 的 `SOURCE_SPECS[*]["status"]` |
+> | 统计推断口径（聚类 t / 非重叠 t / 聚类稳健 OLS） | `src/evaluation/inference.py`（全项目唯一实现处） |
+> | 宽度/冷区的全部结论 | `docs/archive/breadth-what-it-can-and-cannot-do.md` |
+> | 已证伪方向 | `docs/system-audit-and-roadmap.md` §4 |
+> | 待办与待拍板 | `docs/action-items.md` |
+> | 数据侧处置 | `docs/data-remediation-plan-2026-10-04.md` |
+> | 逐次改动取证 | `docs/changes-*.md` |
+>
+> **维护规则**：任何一项的**状态**变化，必须同时更新本页对应行 + 其真相源；
+> 新指标入账前先读 §0 的采纳门槛。
+
+---
+
+## 0. 状态词表 与 采纳门槛
+
+| 标记 | 含义 |
+|:--:|---|
+| ⛔ **已证伪** | 已按门槛检验且**不通过** ⇒ 不作交易依据，**不要回头** |
+| 📐 **描述性** | 可靠地测到了某个量，但**无预测力** ⇒ 只可作状态描述/监控 |
+| ⏳ **待观察** | 已入账但**样本不足或从未评估** |
+| ⚪ **未评估** | 有代码、有产物，但**从未做过预测力检验** |
+| 🚫 **未实现** | 文档有回测数字，但**没有代码、没入账** |
+| 🔴 **已修** | 曾有的口径缺陷，已修正（附影响量化） |
+
+**证据等级**（沿用审计报告的惯例）：
+
+| 标记 | 含义 |
+|:--:|---|
+| ✅ | **本会话实测**（我跑过，可复现） |
+| ⚙️ | **代码事实**（读代码/常量即可确认） |
+| 📄 | **文档记载，未复核** |
+
+**🔑 采纳门槛（五条，缺一不可）** —— 2026-10-05 起：
+
+1. **事件级去重**（ID = `(ind_code, 事件起点)`，不是信号条数）；
+2. **按日聚类**（否则重叠/相依观测把 t 抬高，本项目已栽多次）；
+3. **IS/OOS 双显著**，且**两侧用同一估计量**（否则不可比）；
+4. **重叠窗口校正**（NW 或非重叠抽样）；
+5. 🆕 **同时报中位数/去尾均值与分位**，并用**两种聚合方式**（逐月等权 vs 池化）复核符号
+   —— 均值显著而中位数≈0 是**尾部效应**，不是效应。
+
+---
+
+## 1. 信号来源（台账唯一真相源：`src/signals/sources.py`）
+
+台账 `signals/signals_log.parquet` 只登记这 **3 个**来源：
+
+| 指标 | 位置 | 意图 | 状态 | 依据 |
+|---|---|:--:|:--:|---|
+| ~~`cold_zone`~~ 冷区宽度反转 | `sources.py`（**条目保留，标 `retired`**） | 预测 | 🚫 **已弃用**（原 ⛔ 已证伪） | 事件级 2,122 个：h=20 均值 +0.384 / **中位 +0.024** / 为正 **50.4%**；朴素 t=+2.75 → **按日聚类 −0.13** ✅。**2026-10-06 弃用**：信号退场、报告章节删除，历史 2,234 行标 `retired` 保留 |
+| ~~`tracker_pool`~~ 反转跟踪池 | `sources.py`（**条目保留，标 `retired`**） | 预测 | 🚫 **已弃用**（原 ⛔ 观察项） | 从未正式评估。**2026-10-05 定向证伪（引擎真实事件）：入场事件前瞻超额显著为负** —— entry 3,917 事件 h=20 均值 **−0.219pp**/中位 **−0.583pp**/为正 46%/按日 **t=−2.87**、IS **−0.79** OOS **−3.39** 同号；金叉确认同负（h=20 按日 −2.27）；R≥8% 与预警样本过少（207/59）功效不足 —— (a) 金叉确认 h=60 均值 **−0.72pp**/为正 42%；(b) **R≥8%（核心假设）** 均值从未 \|t\|>2 且**中位数全负**（h=20 −0.707）、IS 正 OOS 负；(c) A1/A3/A4 中 A3/A4 仅微弱负向（0.08~0.20pp，低于成本）。详见 `docs/archive/tracker-design-and-issues.md` §8.1。**2026-10-06 弃用**：脚本（996 行）与产物已清理，历史 21 行标 `retired` 保留 |
+| `mainline` 主线方向成员 | `sources.py:77-84` | 预测 | ⏳ **待观察** | 从未评估。⚠️ **语义基础已被证伪**：判据依赖成交额热度，而资金/成交额被证**滞后于价格** ✅ |
+
+---
+
+## 2. 四套派生装置（方法论 §0 的原始盘点）
+
+| 装置 | 位置 | 意图 | 状态 | 依据 |
+|---|---|:--:|:--:|---|
+| ~~**反转跟踪**~~ | 🔴 **已删除**（原 `scripts/industry_tracker.py`，996 行） | 预测 | 🚫 **已弃用（装置拆除）** | 引擎自身 entry 事件 h=20 均值 **−0.219pp**、按日聚类 **t=−2.87**，IS/OOS 同号 ⇒ 前提被**反驳**；且生产门槛 Sₜ≥50 下131 行业**命中 0 个** 📄；清理依据 `docs/plan/retirement-breadth-tracker-plan.md` |
+| **主线探测** | `scripts/mainline_detector.py` | 预测 | ⏳ **待观察** | 判据做过 A/B（D12–D14 修了前视/误判），但**"能预测"从未检验** ⚙️ |
+| **行情分类** | `scripts/regime_classifier.py` | 预测→已降级 | 📐 **描述性** | `rank_consistency` 对次日延续性 **r=−0.029** ⇒ 只作状态描述 📄 |
+| **净值主表** | `scripts/build_nav_924.py` | 排序 | 📐 **描述性** | 20 日相对强度对未来 \|t\|<2 📄；我实测动量重叠校正后 \|t\|≤1.9 ✅ |
+| ~~**宽度状态**~~（报告章节） | ~~`report_sections.format_width_state_section`~~ | 预测→报告章节 | 🚫 **已弃用（章节删除）** | 七个前瞻方向全空；2026-10-06 随宽度预测用途弃用而从日报移除。⛔ **但 `breadth` 列本身保留为数据探针**（见下） |
+
+### 2.1 反转跟踪的内部组件（逐个都还没被单独检验）
+
+| 组件 | 位置 | 依据/状态 |
+|---|---|---|
+| 金叉确认（3 日 +0.5%）/ 二次金叉（5 日 +1.0%）/ 死叉（3 日） | `industry_tracker.py:40-44` | ⚪ 未评估 ⚙️ |
+| R ≥ 8% ⇒ 成熟不可逆 | `industry_tracker.py:45` | ⚪ 未评估 ⚙️ |
+| **A1–A4 预警 2-of-4**（Δ宽度 / 拥挤度>0.90 / 大实体阴线 / 巨量） | `industry_tracker.py:49-56` | ⚪ 未评估 ⚙️ |
+| Sₜ = Sₜ₋₁ × λₜ（λ 由 Δ宽度×涨幅×量能×拥挤度 几何加权） | `industry_tracker.py:123-146` | ⚪ 未评估；"贝叶斯"名不符实（无似然/先验/后验）📄 |
+| `bw20`（宽度再取 20 日均值）入场闸门 | `industry_tracker.py:424,431` | ⚠️ **过度平滑**：与昨日真实状态横截面相关仅 **0.385**（1 日均值 0.862）✅ |
+
+### 2.2 主线探测的内部判据
+
+| 判据 | 位置 | 状态 |
+|---|---|---|
+| 热度 `heat_ratio ≥ 1.3` 且 20 日超额 ≥0.3%/日 且 胜率 ≥0.6 | `mainline_detector.py:184` | ⚙️ 代码事实；预测力 ⚪ 未评估 |
+| 跨期稳定性：须**连续 ≥3 个交易日** | `mainline_detector.py:185` | 已落地（B1）；实测段数 244→131、主线日 873→**677（保留 77.5%）** ✅ |
+| 五阶段（蛰伏/启动/加速/见顶/瓦解）、`od_ratio` 进攻防御 | `mainline_detector.py:244-290` | ⚪ 未评估；⛔「把阶段识别当交易信号」在 §6 已证伪 |
+| ⚠️ **无最小成员数约束** | `mainline_detector.py:392-395` | 单行业方向群仍可被判为主线（67.9%）✅ |
+
+---
+
+## 3. 三区框架（实现度 1/3）
+
+| 区 | 状态 | 备注 |
+|:--:|:--:|---|
+| 冷区 | ✅ 已实现 | = `cold_zone`，见 §1（已证伪） |
+| **中区** | 🚫 **未实现** | `module_02_industry.py` 硬编码占位 ⚙️ |
+| **热区** | 🚫 **未实现** | 同上 |
+
+文档记载的候选（**均未实现、未入账、且是旧口径** 📄）：
+
+| 候选 | 记载表现 |
+|---|---|
+| 中区：价破 5 日新高 + 宽度上升 | 20 日超额 +1.85%，胜率 64%，N=1,397 |
+| 中区：放量 + 涨 | +0.75%，57%，N=2,631 |
+| 热区：宽高 + 急跌（单日 <−3%） | **+3.01%，65%，N=1,087** |
+| 热区：宽高 + 跌（5 日 <−2%） | +2.95%，63%，N=1,873 |
+| 热区：缩量 + 宽度横盘 | **+3.72%，63%，N=346** |
+
+⚠️ 收益口径、样本规则、数据地基**三者都与今天不同** ⇒ 按门槛 §0，**目前等于没有证据**。
+
+---
+
+## 4. 独立因子与变量
+
+| 因子 | 位置 / 产物列 | 意图 | 状态 | 依据 |
+|---|---|:--:|:--:|---|
+| **拥挤度** `ind_crowd`（换手率） | `scripts/update_industry_factor.py` → `factors/ind_crowd_turnover_daily.parquet` | 预测 | ⛔ **已证伪** | 对未来的 \|t\| 全 < 2 ✅ |
+| **资金流**（主力净流入/超大单） | `moneyflow/` | 预测 | ⛔ **已证伪（且反向）** | 资金是价格的**滞后跟随**：`IC(wret_{t−k}→main_int_t)` 显著为负；"连续 3 日转正"事件 937 次，未来 5/10/20 日方向为负且不显著 ✅ |
+| **两融占比分位** | `src/signals/sentiment.py` → ~~日报"七"章节~~ | 过滤 | 🚫 **随冷区失效 + 章节已删** | 它是**冷区信号之上的条件分组**（N=583，低分位 −1.67pp / 高分位 +1.50pp）📄；冷区已无预测力 ⇒ 过滤器随之失效；且 t 未做重叠校正 ⚙️ |
+| **龙虎榜 / 大宗 / 北向 / 南向** | `daily_regime.parquet` 的 6 列（`lhb_*` / `block_*` / `north_*` / `south_*`） | 状态 | ⚪ **未评估** | 只被聚合进 regime 表；且 `hsgt_top10` 2024-08-19 后 `net_amount` 为 None（**名存实亡**）📄 |
+| **regime 24 列** | `daily_regime.parquet` | 状态 | 📐 描述性 | 见 §2；8 类之间的区分度到 20 日超额极差 3.6pp，但**对未来的预测力为零** 📄 |
+| **净值/相对强度/动量** | `industry_nav_924.parquet`：`nav_w/nav_e`、`rs_w`、`mom20_w/mom60_w` | 排序 | 📐 描述性 | 见 §2 |
+
+---
+
+## 5. 数据在、但**没接进链**的（下一轮的主要空间）
+
+方法论 §2 已确认：**① 景气 ② 估值 ③ 资金 的原料全在 `~/quant-data`，但九步链只读了 ④ 价格结构。**
+
+| 层 | 数据位置 | 状态 |
+|---|---|---|
+| ① 景气 | `financial_statements/income/*`（含 `ann_date`，可 PIT）；`fundamental/fina_YYYYMMDD.parquet`（26 期，2020Q1 起，100+ 指标） | ⚪ **未接入**；⚠️ `fundamental/fina_all.parquet` 与 `income` **不同步**（只重叠 2 个报告期）⇒ 必须用 `income` + `ann_date` 📄 |
+| ② 估值 | `daily_basic/`（1,636 天，18 列含 PE/PB/股息率） | ⚪ **未接入** |
+| ⑤ 叙事 | `news/`、`policy/`（有目录、未接） | ⚪ **未接入** |
+| 产业链 | `industry/etf_industry_similarity_v2.csv` | ⛔ **不可作真值**（存在明显错配，如 TMT50ETF→银行）📄 |
+
+⚠️ 方法论 §9 明确：**先建新表 → 写入台账评估 → 才谈使用**；目前这些只作背景注释。
+
+---
+
+## 6. 已证伪（不要再回头）
+
+来源：`docs/system-audit-and-roadmap.md` §4 📄
+
+- ❌ 四维综合评分 / 简单因子堆叠 → 不提升预测力
+- ❌ 量价确认（放量上涨）做多 → 行业层面 **IC 为负**
+- ❌ 动量 / 低波 / 技术突破 / 资金流 / 质量 / 成长类横截面因子 → IC≈0 或反向
+- ❌ "牛市放大动量信号" → 实为**熊市放大一切有效信号**
+- ❌ **用 IC 评估条件信号** → 稀疏信号被零值稀释，必须用事件研究
+- ❌ 把"阶段识别"直接当交易信号
+- ❌ 用 ETF 相似度当产业链真值（§5）
+- ❌ **拿半衰期定持有期**（半衰期描述"状态多快过时"，不描述"多久能赚到钱"）✅
+
+**本轮新增的已证伪**：
+
+- ❌ **反转跟踪池（`tracker_pool`）**:① **引擎真实入场事件前瞻显著为负** —— h=20 均值 −0.219pp /
+  中位 −0.583pp / 为正 46% / 按日 **t=−2.87**、按月 −2.54、**IS −0.79 / OOS −3.39 同号** ⇒
+  「深睡+异动=反转起点」被**反驳**（方向相反）；② 金叉确认（条件版）同负（h=20 按日 −2.27）；
+  ③ 无条件版三处关键点正向预测力均为零；④ A3/A4 负向仅 0.08~0.20pp（低于成本）；
+  ⑤ ⚠️ `alarming→decaying` 六年零触发 = 死分支 ✅
+
+- ❌ 宽度**单独**作前瞻因子（横截面/择时/风险/分位表/背离/换构造/个股级经典形态 —— 七方向全空）✅
+- ❌ 「买该行业内尚未站上 MA20 的股票」：① 宽度扩张的实现方式是那些股票**当日大涨**（98%，中位 +2.59%）⇒ 不可事前买入；② 该构造 ≈ 个股 1 个月反转（系数 −0.043 vs −0.045）；③ 多头腿不显著（t≈1.5-1.7），spread 全来自**空头腿**；④ IS/OOS 衰减 ✅
+- ❌ 「冷区 × 宽度扩张」的**交互项**：逐月 FM 均值 +0.833 但**中位 +0.000**；聚合方式一换**符号翻转**（FM +0.559 vs 池化 −0.338）✅
+
+---
+
+## 7. 🔴 测量工具自身（**前置阻塞项**，先修它再判新指标）
+
+| 工具 | 位置 | 问题 | 影响 |
+|---|---|---|---|
+| ~~台账评估器 t 值~~ | `src/signals/evaluate.py` | ✅ **已修（2026-10-05）**：改为 ① 事件级去重 → ② **按日聚类 t**（主判据）→ ③ 非重叠抽样 t，并强制并列中位数 | 实测冷区 20 日：**朴素 t=+2.25 → 按日聚类 −0.06**（每期中位数 ≤0 ⇒ 尾部效应）。见 `docs/changes-2026-10-05-eval-inference-caliber.md` |
+| 宽度的评估口径 | 🆕 `src/research/breadth_eval.py`（**未提交**） | 已建立"宽度唯一评估口径"，且**正确复用** `src.utils.forward.forward_sum`（`:47`）✅ | 治本：以前口径散落在临时探针里，一天之内结论被推翻三次 |
+| 宽度评估的测试 | 🆕 `tests/test_breadth_signal.py`（28 项，**未提交**） | 锁住前向窗口/分位回看等语义 ✅ | 与 `tests/test_forward_returns.py`（7 项）互补 |
+| `tools/dev_verify.sh` | 同目录 | `run_side` 永远 `return 0`，脚本末尾无 `exit` ⇒ **恒 exit 0** ⚙️ | 退出码不可信（同源 A/B 的结论要读输出而非退出码） |
+| `tests/test_invariants.py:87` | `test_column_order_hint` | **无任何断言**（只 print）却计入通过数 ⚙️ | 虚增通过数 |
+| `make check` 现状 | — | **54 项中红 1 项**（= 19 结构 + 7 前瞻 + 28 宽度评估；红的是 `mainline_detection` 缺 3 列，pull 覆盖所致）✅ | 见 `docs/action-items.md`；⛔ 不得放宽 `EXPECTED_COLUMNS` 转绿 |
+| `industry_members_daily.parquet` | 数据根 | 仅 **490 天**（文档称 1,636 天）⇒ PIT 未落地，产物是口径拼盘（逐日一致率 36.7%~97.1%）✅ | 前视偏差**在数据上仍未消除**；⚠️ PIT 仍 490 天时**不得**跑 `--force-overwrite` |
+
+> 🔧 **一处待合并的小重复**：`breadth_eval.py:246` 的波动目标仍是手工 `rolling(h).std().shift(-h)`
+> （写法正确、且已被测试锁住），但未走 `forward_sum`。若日后要把"前向窗口"完全收口到单一实现，
+> 可在 `src/utils/forward.py` 加一个通用的 `forward_apply(frame, h, func)`。
+
+---
+
+## 8. 下一轮入口：建议顺序
+
+> 🚫 **两条来源已彻底弃用（2026-10-06）**：`cold_zone` 与 `tracker_pool` 均标记 `status = "retired"`，
+> **实现与报告章节已删除**，台账历史行仅供追溯。演进：10-01 降级为观察项 → 10-05 `tracker_pool` 证伪
+> → 10-06 连同冷区一并弃用（硬证据：交互项 −0.01pp ≈ 0、中位数 −0.13pp 与均值 +0.34pp 反号）。
+> 弃用清理计划见 [`docs/plan/retirement-breadth-tracker-plan.md`](plan/retirement-breadth-tracker-plan.md)，
+> 可行性审查见 [`docs/archive/retirement-breadth-tracker-review.md`](archive/retirement-breadth-tracker-review.md)。
+
+
+1. ✅ **台账评估器已修（2026-10-05）**：事件级去重 + 按日聚类 t（主判据）+ 非重叠 t + 强制中位数；
+   新增 `tests/test_eval_inference.py`（10 项）。**旧报告的一切 t 值作废**。
+2. **把未提交的抗复发资产纳入版本控制**：`src/research/breadth_eval.py`、`tests/test_breadth_signal.py`
+   （目前是 untracked ⇒ 没有版本保护）。
+3. **口径收尾**：源端同步 → 重建全历史 PIT → 重跑 `industry_daily_full`（⚠️ 见 §7 末）。
+4. ✅ **`tracker_pool` 已评、证伪并弃用**（10-05 证伪 → 10-06 弃用，见 `docs/changes-2026-10-05-tracker-pool-downgrade.md`）；
+   ⏳ **`mainline` 仍待评**（唯一未评估的入账来源）——若不过，即为第三条弃用来源。
+5. **中区/热区**（§3）：要么按门槛实现并入账，要么在文档里标"永久不做"，避免半成品长期占据"待实现"。
+6. **景气/估值层**（§5）：按方法论 §9 的顺序走（先建表 → 入账 → 评估），**不要在评估器修好之前做**。
+
+---
+
+## 附录 · 真相源索引（可核查）
+
+| 结论 | 核查位置 |
+|---|---|
+| 三个信号来源及其定位 | `src/signals/sources.py:56-84` |
+| 前瞻窗口唯一实现（防次序错误） | `src/signals/ledger.py:174` + `src/utils/forward.py` |
+| 弃用宽度+跟踪池的清理计划审查 | `docs/archive/plan/retirement-breadth-tracker-review.md` |
+| 评估器推断口径修正（朴素 t → 聚类 t） | `docs/changes-2026-10-05-eval-inference-caliber.md` |
+| 反转跟踪池的设计原理与 8 个设计问题 | `docs/archive/tracker-design-and-issues.md` |
+| `tracker_pool` 降级为观察项（10-05 定位变更记录）→ **已弃用** | `docs/changes-2026-10-05-tracker-pool-downgrade.md` |
+| 🆕 宽度评估的唯一口径 | `src/research/breadth_eval.py`（**未提交**；已正确复用 `forward_sum`） |
+| 宽度七方向全空 | `docs/archive/breadth-what-it-can-and-cannot-do.md` §二 |
+| 冷区×扩张交互项（含中位数与聚合敏感性） | 同上 §十二、§十三 |
+| 个股级"买未站上 MA20"检验 | 同上 §十一 |
+| 半衰期语义与四个用法 | 同上 §十 |
+| 宽度口径缺陷与修正 | 同上 §六、§九 |
+| 前瞻窗口事故（三次同类错误） | `docs/changes-2026-10-05-breadth-window-bug.md` |
+| 冷区降级依据（17 候选） | `docs/archive/changes-2026-10-01-cold-zone-downgrade.md` |
 | 已证伪清单 | `docs/system-audit-and-roadmap.md` §4 |
 | P0-2 静默坏值 | `docs/changes-2026-10-03-daily-full-breadth-anomaly.md` |
 | 防复发测试 | `tests/test_forward_returns.py`（7 项）+ `tests/selftest.py` 第③④节 |

@@ -82,7 +82,8 @@ ARTIFACTS = {
     "daily_regime":              (INDUSTRY_DIR / "daily_regime.parquet", "derived"),
     "monthly_regime_summary":    (INDUSTRY_DIR / "monthly_regime_summary.csv", "derived"),
     "mainline_detection":        (INDUSTRY_DIR / "mainline_detection.csv", "derived"),
-    "tracker_report":            (INDUSTRY_DIR / "tracker_report.csv", "derived"),
+    # 🔴 2026-10-06 摘除 tracker_report —— 跟踪池装置已弃用（计划 §5.1/第 5 批）。
+    #   产物文件由源端删除；此处同步摘登记，否则 --audit-writes 会报「登记了但不存在」。
     "industry_universe":         (DATA_DIR / "industry_universe.parquet", "derived"),
     "ind_crowd_turnover_daily":  (FACTOR_DIR / "ind_crowd_turnover_daily.parquet", "derived"),
     "industry_margin_daily":     (SIGNALS_DIR / "industry_margin_daily.parquet", "derived"),

@@ -2,7 +2,7 @@
 
 > 性质：**信号定位变更**（非代码逻辑/口径变更）
 > 影响面：`SOURCE_SPECS` 一个字段 + 评估报告渲染（按来源读降级日期）+ 文档
-> 依据：`docs/tracker-design-and-issues.md` §8.1 / §8.2（含全部数字与脚本）
+> 依据：`docs/archive/tracker-design-and-issues.md` §8.1 / §8.2（含全部数字与脚本）
 > 回滚：把 `src/signals/sources.py` 的 `SOURCE_SPECS["tracker_pool"]["status"]` 改回 `"pending"`，一行
 
 ---
@@ -61,7 +61,7 @@
   - 「信号定位」章节三行：`mainline ⏳ 待观察` / `cold_zone ⛔ 观察项` / `tracker_pool ⛔ 观察项`
     （后者的"一句话"显示"入场事件前瞻超额**显著为负**；仅留痕，**不作交易依据**"）；
   - 各来源横幅**各带自己的日期**：`cold_zone`（2026-10-01）+ 指向冷区降级文档；
-    `tracker_pool`（2026-10-05）+ 指向 `docs/tracker-design-and-issues.md`；`mainline` 无横幅。
+    `tracker_pool`（2026-10-05）+ 指向 `docs/archive/tracker-design-and-issues.md`；`mainline` 无横幅。
 - 全套结构化验证见下一次 `make check`（本变更不含产物口径改动，故不触发 `dev_verify` 的产物 diff）。
 
 ## 5. 回滚

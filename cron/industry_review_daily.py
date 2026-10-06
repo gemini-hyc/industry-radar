@@ -262,8 +262,9 @@ if __name__ == "__main__":
 
     report = run(trade_date)
 
-    # ── 追加链路其余产出（跟踪池 / 主线 / regime）──
-    # 只读现有产出，不重算、不改 module_02 口径；任一环节异常都不影响主报告
+    # ── 追加链路其余产出（主线 / regime）──
+    # 只读现有产出，不重算；任一环节异常都不影响主报告
+    # 🔴 2026-10-06：跟踪池、冷区资金面、宽度状态三节已随对应来源弃用而移除。
     extra = ""
     try:
         from src.daily_review.report_sections import append_to_report, build_extra_sections
@@ -272,7 +273,7 @@ if __name__ == "__main__":
         if append_to_report(trade_date, extra) is None:
             extra = ""  # 主报告未落盘（非交易日/写入失败）→ 附加章节也不展示
         else:
-            print("\n[附加章节] 已追加 跟踪池 / 主线状态 / 行情 regime 至报告文件")
+            print("\n[附加章节] 已追加 主线状态 / 行情 regime 至报告文件")
     except Exception as e:
         extra = ""
         print(f"⚠️ 附加章节生成失败（不影响主报告）: {e}")
@@ -307,23 +308,21 @@ if __name__ == "__main__":
     else:
         try:
             from src.signals import ledger as _ledger
-            from src.signals.sources import cold_zone_history, snapshot_signals
+            from src.signals.sources import snapshot_signals
 
+            # 🔴 2026-10-06 弃用：冷区信号（width_reversal）已退场，不再逐日入账。
+            #   依据 docs/plan/retirement-breadth-tracker-plan.md §2.1/§2.2。
+            #   台账中 2,234 条 cold_zone 历史保留（标 retired），只为可追溯，不再新增。
             snapshots = snapshot_signals(trade_date)
-            cold = []
-            try:  # 当日冷区信号（旗舰信号逐日入账，不依赖手工回填）
-                cold = cold_zone_history(start=trade_date, end=trade_date, with_crowding=False)
-            except Exception as e:
-                print(f"⚠️ 冷区信号入账失败（不影响其他来源）: {e}")
 
-            rows = list(snapshots) + list(cold)
+            rows = list(snapshots)
             led = _ledger.load_ledger()
             before = len(led)
             led = _ledger.upsert(led, rows)
             led = _ledger.backfill_forward_returns(led)
             path = _ledger.save_ledger(led)
             print(f"\n[信号台账] {trade_date} 入账 {len(rows)} 条"
-                  f"（快照 {len(snapshots)} + 冷区 {len(cold)}）；"
+                  f"（快照 {len(snapshots)}）；"
                   f"台账 {before} → {len(led)} 条 → {path}")
         except Exception as e:
             print(f"⚠️ 信号台账更新失败（不影响主报告）: {e}")
