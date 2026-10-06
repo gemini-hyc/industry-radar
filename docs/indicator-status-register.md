@@ -173,7 +173,7 @@
 
 | 工具 | 位置 | 问题 | 影响 |
 |---|---|---|---|
-| **台账评估器 t 值** | `src/signals/evaluate.py:40-50` `summarize()` | 用**朴素 t**（`mean/(std/√n)`），**既不事件级去重、也不做重叠校正**，而台账前向收益是重叠窗口 ⚙️ | **评估报告里所有 t 系统性偏高**（审计 §6 引用的"20 日 t=2.25"即属此类）⇒ 新指标"通过"不可信 |
+| ~~台账评估器 t 值~~ | `src/signals/evaluate.py` | ✅ **已修（2026-10-05）**：改为 ① 事件级去重 → ② **按日聚类 t**（主判据）→ ③ 非重叠抽样 t，并强制并列中位数 | 实测冷区 20 日：**朴素 t=+2.25 → 按日聚类 −0.06**（每期中位数 ≤0 ⇒ 尾部效应）。见 `docs/changes-2026-10-05-eval-inference-caliber.md` |
 | 宽度的评估口径 | 🆕 `src/research/breadth_eval.py`（**未提交**） | 已建立"宽度唯一评估口径"，且**正确复用** `src.utils.forward.forward_sum`（`:47`）✅ | 治本：以前口径散落在临时探针里，一天之内结论被推翻三次 |
 | 宽度评估的测试 | 🆕 `tests/test_breadth_signal.py`（28 项，**未提交**） | 锁住前向窗口/分位回看等语义 ✅ | 与 `tests/test_forward_returns.py`（7 项）互补 |
 | `tools/dev_verify.sh` | 同目录 | `run_side` 永远 `return 0`，脚本末尾无 `exit` ⇒ **恒 exit 0** ⚙️ | 退出码不可信（同源 A/B 的结论要读输出而非退出码） |
@@ -189,9 +189,8 @@
 
 ## 8. 下一轮入口：建议顺序
 
-1. **🔴 先修台账评估器**（§7 第 1 条）：`src/signals/evaluate.py` 加事件级去重 + 按日聚类 + 中位数。
-   **在此之前，任何"通过"都不可信** —— 这是唯一真正的阻塞项。
-   （宽度的评估口径已由 🆕 `src/research/breadth_eval.py` 单独立好，但它**不覆盖台账里其他来源**。）
+1. ✅ **台账评估器已修（2026-10-05）**：事件级去重 + 按日聚类 t（主判据）+ 非重叠 t + 强制中位数；
+   新增 `tests/test_eval_inference.py`（10 项）。**旧报告的一切 t 值作废**。
 2. **把未提交的抗复发资产纳入版本控制**：`src/research/breadth_eval.py`、`tests/test_breadth_signal.py`
    （目前是 untracked ⇒ 没有版本保护）。
 3. **口径收尾**：源端同步 → 重建全历史 PIT → 重跑 `industry_daily_full`（⚠️ 见 §7 末）。
@@ -208,6 +207,7 @@
 |---|---|
 | 三个信号来源及其定位 | `src/signals/sources.py:56-84` |
 | 前瞻窗口唯一实现（防次序错误） | `src/signals/ledger.py:174` + `src/utils/forward.py` |
+| 评估器推断口径修正（朴素 t → 聚类 t） | `docs/changes-2026-10-05-eval-inference-caliber.md` |
 | 反转跟踪池的设计原理与 8 个设计问题 | `docs/tracker-design-and-issues.md` |
 | `tracker_pool` 降级为观察项（定位变更记录） | `docs/changes-2026-10-05-tracker-pool-downgrade.md` |
 | 🆕 宽度评估的唯一口径 | `src/research/breadth_eval.py`（**未提交**；已正确复用 `forward_sum`） |
