@@ -48,8 +48,9 @@ STATUS_LABEL: Dict[str, str] = {
 STATUS_ORDER: Dict[str, int] = {"active": 0, "pending": 1, "observational": 2}
 ALL_STATUSES = tuple(STATUS_ORDER)
 
-# 冷区信号降级日期（写进报告，便于追溯口径变更时点）
-COLD_ZONE_DOWNGRADED_ON = "2026-10-01"
+# 降级时点改为**按来源**记录在 SOURCE_SPECS[*]["status_since"]**（2026-10-05）。
+# 原单一常量 COLD_ZONE_DOWNGRADED_ON 已删除：它把"只有一个来源会降级"写死进了代码，
+# 当 tracker_pool 也降级时就会漏报日期（评估报告的观察项横幅原样硬编码 2026-10-01）。
 
 # 各来源的强度口径与方向（评估时据此决定排序/分档方向）
 SOURCE_SPECS: Dict[str, Dict] = {
@@ -59,6 +60,8 @@ SOURCE_SPECS: Dict[str, Dict] = {
         "direction": "asc",
         # 定位变更（2026-10-01）：见 docs/changes-2026-10-01-cold-zone-downgrade.md
         "status": "observational",
+        "status_since": "2026-10-01",          # 降级生效日（评估报告的观察项横幅按此渲染）
+        "status_doc": "docs/changes-2026-10-01-cold-zone-downgrade.md",
         "status_short": "样本外证据不足，**不作交易依据**（保留展示以积累样本）",
         "status_note": (
             "17 个候选过滤器 × IS/OOS 切分实测：样本内 17/17 全为正，但 IS↔OOS 相关仅 +0.18，"
@@ -70,9 +73,20 @@ SOURCE_SPECS: Dict[str, Dict] = {
         "label": "贝叶斯反转跟踪池（入场事件）",
         "score_hint": "Sₜ，越大越强",
         "direction": "desc",
-        "status": "pending",
-        "status_short": "仅向前样本，规模不足以评估",
-        "status_note": "有状态引擎，历史无法无损重建；只有向前样本，尚未积累到可评估规模。",
+        # 降级（2026-10-05）：插桩运行真实引擎后按五条门槛检验，**入场事件前瞻超额显著为负**
+        # 依据 docs/tracker-design-and-issues.md §8.2；台账记的正是 entry 事件，故该节即对本来源的检验
+        "status": "observational",
+        "status_since": "2026-10-05",
+        "status_doc": "docs/tracker-design-and-issues.md",
+        "status_short": "入场事件前瞻超额**显著为负**；仅留痕，**不作交易依据**",
+        "status_note": (
+            "插桩运行真实引擎（全历史 6.8 年、8,932 条真实事件）后按五条门槛检验：entry 事件"
+            "（= 本来源的入账事件）3,917 个 —— h=20 均值 −0.219pp / 中位 −0.583pp / 为正 46%，"
+            "按日聚类 t=−2.87、按月聚类 −2.54，IS −0.79 与 OOS −3.39 **同号**；"
+            "金叉确认（引擎条件版）同负（h=20 按日 t=−2.27）。"
+            "⇒ 核心前提「深睡+异动=反转起点」被**反驳**（方向相反），而非样本不足。"
+            "⛔ 既不得作交易依据，**反向使用亦不被支持**（样本与效应都小，且未做成本与可交易性检验）。"
+        ),
     },
     "mainline": {
         "label": "主线方向成员行业（每日状态）",
@@ -81,6 +95,7 @@ SOURCE_SPECS: Dict[str, Dict] = {
         "status": "pending",
         "status_short": "仅向前样本，规模不足以评估",
         "status_note": "每日状态快照，只有向前样本，尚未积累到可评估规模。",
+        # ⚠️ 待办：本来源尚未按五条门槛评估（见 docs/indicator-status-register.md §8-4）
     },
 }
 

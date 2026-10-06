@@ -30,11 +30,19 @@ logger = logging.getLogger(__name__)
 REGIME_PATH = INDUSTRY_DIR / "daily_regime.parquet"
 MIN_BUCKET_N = 5  # 少于该样本数的分组不展示（避免小样本噪声结论）
 
-# 观察项的统一定位声明 —— 出现在每个观察项来源的详解之前
-OBSERVATIONAL_BANNER = (
-    "> ⛔ **本来源已被降级为「观察项」（2026-10-01）**："
+# 观察项的统一定位声明 —— 出现在每个观察项来源的详解之前。
+# ⚠️ 2026-10-05：原实现把降级日期**硬编码**成「（2026-10-01）」；当 tracker_pool 也降级时
+#    就会给它安上错误日期。现改为从 SOURCE_SPECS[*]["status_since"] 读取（按来源）。
+_OBSERVATIONAL_BANNER_TMPL = (
+    "> ⛔ **本来源已被降级为「观察项」{when}**："
     "下表仅用于**持续观测样本积累**，**不作为交易依据，也不得据此调参**。"
 )
+
+
+def observational_banner(spec: Dict) -> str:
+    """按来源渲染观察项横幅（日期取自该来源的 status_since）"""
+    since = spec.get("status_since")
+    return _OBSERVATIONAL_BANNER_TMPL.format(when=f"（{since}）" if since else "")
 
 
 def summarize(values: pd.Series) -> Dict:
@@ -235,10 +243,12 @@ def render_markdown(
         status = spec.get("status", "pending")
         lines += [f"## 来源：{src} · {spec.get('label', '')}", ""]
         if status == "observational":
-            lines += [OBSERVATIONAL_BANNER]
+            lines += [observational_banner(spec)]
             if spec.get("status_note"):
                 lines += [f"> 依据：{spec['status_note']}"]
-            lines += ["> 定位变更与回滚方式见 `docs/changes-2026-10-01-cold-zone-downgrade.md`。"]
+            doc = spec.get("status_doc")
+            lines += [f"> 定位变更与回滚方式见 `{doc}`。"] if doc else [
+                "> 定位变更与回滚方式见对应 `docs/changes-*.md`。"]
         elif spec.get("status_note"):
             lines += [f"> 定位：**{STATUS_LABEL.get(status, status)}**　{spec['status_note']}"]
         lines += [""]
