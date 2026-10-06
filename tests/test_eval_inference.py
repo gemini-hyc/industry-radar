@@ -30,6 +30,11 @@ from src.signals.evaluate import (
     nonoverlap_t,
     summarize,
 )
+from src.evaluation.inference import (
+    chi2_survival_even_df,
+    classify_three_segment,
+    cochran_q_homogeneity,
+)
 
 
 def _mk(n_rows: int) -> pd.DataFrame:
@@ -147,6 +152,71 @@ class TestSummarize(unittest.TestCase):
 
     def test_thresholds_are_sane(self):
         self.assertGreaterEqual(MIN_CLUSTER_N, 2)
+
+
+class TestCochranQThreeSegment(unittest.TestCase):
+    """⑦ 段间同质性 Q 检验与三分类（review §11.2 检验版，2026-10-06）。
+
+    锁四件事：① df=2 闭式 `exp(−q/2)` 数值正确、奇数 df 拒绝；
+    ② 同质 → p 大 → structure；③ **线性对比不是单调性检验** —— 非单调对
+    不得因"首尾差大"被判新生/衰减；④ 衰减=严格递减**不设 SE 门槛**（规格钉死：
+    加 SE 得 7 对，文档口径 12 对，差 5 对全是"缓降未超噪声"）。
+    """
+
+    def test_closed_form_df2_and_rejects_odd_df(self):
+        import math
+        self.assertAlmostEqual(chi2_survival_even_df(3.841, 2),
+                               math.exp(-3.841 / 2), places=10)
+        # df=4: P = exp(−q/2)(1 + q/2)
+        q = 5.991
+        self.assertAlmostEqual(chi2_survival_even_df(q, 4),
+                               math.exp(-q / 2) * (1 + q / 2), places=10)
+        with self.assertRaises(ValueError):
+            chi2_survival_even_df(1.0, 3)          # 奇数 df 必须显式拒绝，不得近似
+
+    def test_homogeneous_segments_are_structure(self):
+        # 三段几乎同水平：Q≈0 ⇒ p≈1 ⇒ structure
+        c = classify_three_segment([0.50, 0.505, 0.495], [486, 484, 666])
+        self.assertTrue(c["homogeneous"])
+        self.assertEqual(c["class"], "structure")
+
+    def test_non_monotonic_pair_is_flicker_even_with_big_endpoints(self):
+        # [0.2 → 0.7 → 0.5]：线性对比 c=(−1,0,1) 只看首尾会判"显著趋势"，
+        # 但它**上去又下来** —— 必须是 flicker，不是 emerging（review §11.2 要点 4）。
+        c = classify_three_segment([0.20, 0.70, 0.50], [486, 484, 666])
+        self.assertFalse(c["homogeneous"])
+        self.assertEqual(c["class"], "flicker")
+
+    def test_gentle_decline_within_noise_is_structure(self):
+        # [0.59, 0.55, 0.49]：缓降全在噪声内 ⇒ Q 不显著 ⇒ 同质 ⇒ structure。
+        # （这正是 Q 检验优于"看形状"的地方：缓降只要不超噪声就不是真漂移。）
+        c = classify_three_segment([0.59, 0.55, 0.49], [486, 484, 666])
+        self.assertTrue(c["homogeneous"])
+        self.assertEqual(c["class"], "structure")
+
+    def test_hetero_strict_decline_with_small_step_is_decaying(self):
+        # [0.587, 0.503, 0.478]（真实数据对 SH.LIST0008↔SH.LIST0047）：
+        # Q 显著（异质）且严格递减，但第二级降幅 0.033 < SE₂₃≈0.060。
+        # 规格钉死：文档口径（衰减不设 SE 门槛）= decaying；
+        # 若给衰减加 SE 门槛会错成 flicker（实测差 5 对）。
+        c = classify_three_segment([0.587, 0.503, 0.478], [486, 484, 666])
+        self.assertFalse(c["homogeneous"])
+        self.assertEqual(c["class"], "decaying")
+
+    def test_emerging_requires_each_step_to_exceed_se(self):
+        # 严格递增但第二级增量未超 SE ⇒ 不得判新生（新生有转正路径，判据从严）。
+        c = classify_three_segment([0.20, 0.24, 0.50], [486, 484, 666])
+        self.assertFalse(c["homogeneous"])
+        self.assertEqual(c["class"], "flicker")
+        # 对照：文档正例 [0.2, 0.6, 0.7] 两级都超 SE ⇒ emerging
+        c2 = classify_three_segment([0.20, 0.60, 0.70], [486, 484, 666])
+        self.assertEqual(c2["class"], "emerging")
+
+    def test_input_validation(self):
+        with self.assertRaises(ValueError):
+            cochran_q_homogeneity([0.5, 1.2, 0.3], [486, 484, 666])   # |r| ≥ 1
+        with self.assertRaises(ValueError):
+            cochran_q_homogeneity([0.5, 0.4], [10, 2])                # 段样本 ≤ 3
 
 
 if __name__ == "__main__":

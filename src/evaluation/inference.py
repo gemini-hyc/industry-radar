@@ -42,6 +42,9 @@ __all__ = [
     "cs_rank_ic",
     "ts_quantile",
     "tail_concentration",
+    "cochran_q_homogeneity",
+    "chi2_survival_even_df",
+    "classify_three_segment",
 ]
 
 
@@ -190,9 +193,10 @@ def cluster_se(df: pd.DataFrame, ycol: str, xcols: Sequence[str],
 
 
 
-# ══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 # ④ 横截面 IC 与时序分位
 # ══════════════════════════════════════════════════════════════════
+
 
 def cs_rank_ic(signal: pd.DataFrame, fwd: pd.DataFrame,
                min_industries: int = 20) -> pd.Series:
@@ -276,3 +280,100 @@ def tail_concentration(x: pd.Series, top_frac: float = 0.01) -> Dict:
                             if (abs(total) > 0 and net_over_abs > 0.02)
                             else float("nan")),
     }
+
+
+# ══════════════════════════════════════════════════════════════════
+# ⑥ 段间同质性检验与三分类（行业链验证 · 2026-10-06，review §11.2 检验版）
+# ══════════════════════════════════════════════════════════════════
+
+def chi2_survival_even_df(q: float, df: int) -> float:
+    """偶数自由度卡方生存函数 `P(X > q)` 的**精确闭式**（无需 scipy）。
+
+    对偶数 df：`P = exp(−q/2) · Σ_{k=0}^{df/2−1} (q/2)^k / k!`。
+    本项目三段稳定性检验 df=2 ⇒ `P = exp(−q/2)`。
+    奇数 df 需要正态 CDF（erf），本机无 scipy ⇒ 显式拒绝，**不得**用正态近似糊弄
+    （近似在 q 小、df 大时偏差可达两位数百分点）。
+    """
+    if df <= 0 or df % 2 != 0:
+        raise ValueError(f"chi2_survival_even_df: 仅支持偶数 df，收到 df={df}"
+                         "（本项目三段检验 df=2；奇数 df 需 scipy，本机没有）")
+    if q < 0:
+        raise ValueError(f"chi2_survival_even_df: q 必须 ≥ 0，收到 {q}")
+    half = q / 2.0
+    term, s = 1.0, 1.0
+    for k in range(1, df // 2):
+        term *= half / k
+        s += term
+    return math.exp(-half) * s
+
+
+def cochran_q_homogeneity(rs: Sequence[float], ns: Sequence[int]) -> Dict:
+    """Cochran Q 段间同质性检验（Fisher-z 变换）。返回 `{Q, df, p_survival, z, w, zbar}`。
+
+    用途：判断 k 段（如 2020-21 / 2022-23 / 2024-26）的残差相关 r 是否来自
+    同一水平 —— `p_survival > 0.05` ⇒ 同质（结构），否则段间有真实漂移。
+
+    口径（`docs/plan/chain-clustering-review.md` §11.2，勿改动）：
+    - `z = arctanh(clip(r, ±0.999))`（Fisher-z）；
+    - `w = n − 3`（各段权重，n = 段内交易日数）；
+    - `zbar = Σwz / Σw`；`Q = Σw(z − zbar)²`；`df = k − 1`（三段 ⇒ 2）。
+    """
+    r = np.asarray(rs, dtype=float)
+    n = np.asarray(ns, dtype=float)
+    if r.shape != n.shape or r.ndim != 1 or len(r) < 2:
+        raise ValueError("cochran_q_homogeneity: rs/ns 须为同长的一维序列且段数 ≥ 2")
+    if np.any(n <= 3):
+        raise ValueError(f"cochran_q_homogeneity: 段样本数必须 > 3（收到 {ns}）")
+    if np.any(np.abs(r) >= 1.0):
+        raise ValueError(f"cochran_q_homogeneity: |r| 必须 < 1（收到 {rs}）")
+    z = np.arctanh(r)                       # 已确保 |r|<1，无需再 clip
+    w = n - 3.0
+    zbar = float((z * w).sum() / w.sum())
+    q = float((w * (z - zbar) ** 2).sum())
+    df = len(r) - 1
+    return {
+        "Q": q, "df": df,
+        "p_survival": chi2_survival_even_df(q, df) if df % 2 == 0 else float("nan"),
+        "z": z.tolist(), "w": w.tolist(), "zbar": zbar,
+    }
+
+
+def classify_three_segment(rs: Sequence[float], ns: Sequence[int],
+                           alpha: float = 0.05) -> Dict:
+    """三段相关 → 检验版三分类（**替代旧极差 ≤0.13 拍系数版，旧计数一律作废**）。
+
+    判据（review §11.2，锚在零分布上不锚在门槛上）：
+    - **结构**：Q 同质性检验 `p > alpha`（同水平 ⇒ 报告为"实测 vs 噪声期望"）；
+    - **新生**：不同质 **且** z 严格单调递增 **且** 每级增量 > 自身
+      `SE(Δz)=√(1/wᵢ+1/wⱼ)`。⚠️ 必须另加严格单调：3 点等距的线性对比 c=(−1,0,1)
+      只看首尾（中间权重为 0），**不是单调性检验**；
+    - **衰减**：不同质 且 z **严格单调递减（不设 SE 门槛）**。
+      ⚠️ 规格钉死记录（2026-10-06）：给衰减也加 SE 门槛会得 7 对（差 5 对，
+      全是"缓降未超噪声"如 [0.59,0.55,0.49]）；文档口径 = 仅严格递减 ⇒ 12 对，
+      与 review §11.2 表逐格一致。衰减处置 = 拒，判据松紧不影响下游，故从宽；
+      **新生须转正路径，判据从严** —— 这是不对称的理由；
+    - **闪烁**：其余（非单调、无一致水平）。
+
+    返回 `{class, Q, df, p_survival, homogeneous, steps}`，
+    `steps = [(Δz₁₂, SE₁₂, 增量>SE), (Δz₂₃, SE₂₃, 增量>SE)]`。
+    """
+    info = cochran_q_homogeneity(rs, ns)
+    z = np.asarray(info["z"])
+    w = np.asarray(info["w"])
+    homogeneous = info["p_survival"] > alpha
+    steps = []
+    for i in range(len(z) - 1):
+        dz = float(z[i + 1] - z[i])
+        se = float(math.sqrt(1.0 / w[i] + 1.0 / w[i + 1]))
+        steps.append({"dz": dz, "se": se, "exceeds_se": abs(dz) > se})
+    if homogeneous:
+        cls = "structure"
+    elif all(s["dz"] > s["se"] for s in steps):        # 递增且每级超噪声（从严：有转正路径）
+        cls = "emerging"
+    elif all(s["dz"] < 0 for s in steps):              # 严格递减即衰减（从宽：处置=拒）
+        cls = "decaying"
+    else:
+        cls = "flicker"
+    return {"class": cls, "Q": info["Q"], "df": info["df"],
+            "p_survival": info["p_survival"], "homogeneous": homogeneous,
+            "steps": steps}
