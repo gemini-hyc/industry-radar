@@ -201,6 +201,12 @@
 > → 10-06 连同冷区一并弃用（硬证据：交互项 −0.01pp ≈ 0、中位数 −0.13pp 与均值 +0.34pp 反号）。  
 > 弃用清理计划见 [`docs/plan/retirement-breadth-tracker-plan.md`](plan/retirement-breadth-tracker-plan.md)，  
 > 可行性审查见 [`docs/archive/retirement-breadth-tracker-review.md`](archive/retirement-breadth-tracker-review.md)。
+>
+> ⚠️ **`mainline` 现为 `SOURCE_SPECS` 中唯一的来源**（另两条已 `retired`），而它正是被方法论 §2.2
+> 判定「**测错对象**」的那个（全市场相关聚类 = beta 聚合产物：58 行业巨群 / 群随数据漂移）。
+> 处置建议**先标 `observational` 而非停用** —— 见
+> [`docs/plan/chain-clustering-review.md`](plan/chain-clustering-review.md) §9（含行业链聚类方法的
+> 修订稿与 **0.30 阈值裁定**）。
 
 1. ✅ **台账评估器已修（2026-10-05）**：事件级去重 + 按日聚类 t（主判据）+ 非重叠 t + 强制中位数；  
    新增 `tests/test_eval_inference.py`（10 项）。**旧报告的一切 t 值作废**。
@@ -220,7 +226,7 @@
 | -------------------------------------------- | -------------------------------------------------------------- |
 | 三个信号来源及其定位                                   | `src/signals/sources.py:56-84`                                 |
 | 前瞻窗口唯一实现（防次序错误）                              | `src/signals/ledger.py:174` + `src/utils/forward.py`           |
-| 弃用宽度+跟踪池的清理计划审查                              | `docs/archive/plan/retirement-breadth-tracker-review.md`       |
+| 弃用宽度+跟踪池的清理计划审查                              | `docs/archive/retirement-breadth-tracker-review.md`       |
 | 评估器推断口径修正（朴素 t → 聚类 t）                       | `docs/changes-2026-10-05-eval-inference-caliber.md`            |
 | 反转跟踪池的设计原理与 8 个设计问题                          | `docs/archive/tracker-design-and-issues.md`                    |
 | `tracker_pool` 降级为观察项（10-05 定位变更记录）→ **已弃用** | `docs/changes-2026-10-05-tracker-pool-downgrade.md`            |
@@ -449,7 +455,7 @@
 | 三个信号来源及其定位 | `src/signals/sources.py:56-84` |
 | 前瞻窗口唯一实现（防次序错误） | `src/signals/ledger.py:174` + `src/utils/forward.py` |
 | 行业链聚类方法（§2.2）审查与修订稿 —— **含 0.30 阈值裁定** | `docs/plan/chain-clustering-review.md` |
-| 弃用宽度+跟踪池的清理计划审查 | `docs/archive/plan/retirement-breadth-tracker-review.md` |
+| 弃用宽度+跟踪池的清理计划审查 | `docs/archive/retirement-breadth-tracker-review.md` |
 | 评估器推断口径修正（朴素 t → 聚类 t） | `docs/changes-2026-10-05-eval-inference-caliber.md` |
 | 反转跟踪池的设计原理与 8 个设计问题 | `docs/archive/tracker-design-and-issues.md` |
 | `tracker_pool` 降级为观察项（10-05 定位变更记录）→ **已弃用** | `docs/changes-2026-10-05-tracker-pool-downgrade.md` |
