@@ -189,6 +189,11 @@
 
 ## 8. 下一轮入口：建议顺序
 
+> ⚠️ **两条已裁决的退场**：`cold_zone`（2026-10-01）与 `tracker_pool`（2026-10-05）均已降级为观察项。
+> **弃用清理计划的可行性审查**（含 4 条必补 + 5 项调整 + 行号核对表）见
+> [`docs/plan/retirement-breadth-tracker-review.md`](plan/retirement-breadth-tracker-review.md)。
+
+
 1. ✅ **台账评估器已修（2026-10-05）**：事件级去重 + 按日聚类 t（主判据）+ 非重叠 t + 强制中位数；
    新增 `tests/test_eval_inference.py`（10 项）。**旧报告的一切 t 值作废**。
 2. **把未提交的抗复发资产纳入版本控制**：`src/research/breadth_eval.py`、`tests/test_breadth_signal.py`
@@ -207,6 +212,7 @@
 |---|---|
 | 三个信号来源及其定位 | `src/signals/sources.py:56-84` |
 | 前瞻窗口唯一实现（防次序错误） | `src/signals/ledger.py:174` + `src/utils/forward.py` |
+| 弃用宽度+跟踪池的清理计划审查 | `docs/plan/retirement-breadth-tracker-review.md` |
 | 评估器推断口径修正（朴素 t → 聚类 t） | `docs/changes-2026-10-05-eval-inference-caliber.md` |
 | 反转跟踪池的设计原理与 8 个设计问题 | `docs/tracker-design-and-issues.md` |
 | `tracker_pool` 降级为观察项（定位变更记录） | `docs/changes-2026-10-05-tracker-pool-downgrade.md` |
