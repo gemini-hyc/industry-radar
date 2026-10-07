@@ -1,9 +1,9 @@
 {
   "_meta": {
-    "generated_at": "2026-10-04 09:23:18",
+    "generated_at": "2026-10-07 21:48:55",
     "data_root": "/Users/hyc/quant-data",
     "note": "数值快照基线 —— 只用于「数据变化 vs 行为回归」的区分，不作失败判据",
-    "git_commit": "b3287ee"
+    "git_commit": "c86e084"
   },
   "artifacts": {
     "industry_daily_full": {
@@ -207,44 +207,6 @@
       "rows": 23,
       "cols": 12,
       "n_mainline": 1
-    },
-    "tracker_report": {
-      "exists": true,
-      "rows": 131,
-      "cols": 11,
-      "date_col": "signal_date",
-      "date_min": "2026-06-12",
-      "date_max": "2026-09-30",
-      "n_days": 36,
-      "n_industries": 131,
-      "by_status": {
-        "eliminated": 121,
-        "triggered": 7,
-        "tracking": 3
-      },
-      "stats": {
-        "S0": {
-          "n": 131,
-          "nan": 0,
-          "mean": 35.572519,
-          "min": 16.0,
-          "max": 100.0
-        },
-        "score": {
-          "n": 131,
-          "nan": 0,
-          "mean": 23.478626,
-          "min": 5.7,
-          "max": 66.6
-        },
-        "days": {
-          "n": 131,
-          "nan": 0,
-          "mean": 15.29771,
-          "min": 0.0,
-          "max": 31.0
-        }
-      }
     },
     "signals_log": {
       "exists": true,
