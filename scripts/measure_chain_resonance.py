@@ -126,7 +126,11 @@ def main() -> int:
     # ── 探针（含金丝雀链）──
     gap_series = (res_df.groupby("date")["style_share"].mean()
                   if len(res_df) else pd.Series(dtype=float))
-    probe = PR.run_probes(F, None if X is None else X.tail(C.WINDOW_DAYS),
+    # ⚠️ 传完整 X，不做 `.tail(C.WINDOW_DAYS)` 截断（2026-10-07 修正）：
+    #   X 是 **long** 表（date × ind_code × 因子），tail(250) 是 250 **行** ≈ 2 个交易日，
+    #   不是 250 个交易日 ⇒ 截断反而会让目标日的覆盖行被切掉。
+    #   探针内部按 target_date 自己取当日行（probe._normalize_panel）。
+    probe = PR.run_probes(F, X,
                           rr.n_factors_used, rr.adj, rr.raw, rr.betas, codes,
                           corrs_raw, corrs_adj, l1_of,
                           gap_series=gap_series, target_date=dates[-1])

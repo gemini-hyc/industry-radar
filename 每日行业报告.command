@@ -8,14 +8,23 @@
 #    2. scripts/compute_weighted_returns.py      行业市值加权涨跌幅
 #    3. scripts/build_industry_daily_full.py     等权行业日频聚合（nav_e 上游）
 #    4. scripts/update_industry_factor.py        拥挤度因子 ind_crowd
-#    5. scripts/mainline_detector.py             主线探测
-#    6. scripts/regime_classifier.py             行情 regime
-#    7. scripts/build_nav_924.py                 行业走势主表（924 起累计净值）
-#    8. cron/industry_review_daily.py            日报（自带前置补齐 + 完备性检查兜底）
+#    5. scripts/build_style_panel.py             风格因子面板 X/f（复现三件套①）
+#    6. scripts/measure_chain_resonance.py       链共振测量 + 退化探针（复现三件套②③）
+#    7. scripts/mainline_detector.py             主线探测
+#    8. scripts/regime_classifier.py             行情 regime
+#    9. scripts/build_nav_924.py                 行业走势主表（924 起累计净值）
+#   10. cron/industry_review_daily.py            日报（自带前置补齐 + 完备性检查兜底）
 #
 #  🔴 2026-10-06：原第 5 步「scripts/industry_tracker.py 贝叶斯反转跟踪」已移除
 #     （装置零产出：生产门槛 Sₜ≥50 下 131 个行业命中 0 个；引擎自身事件 h=20 按日聚类 t=−2.87）。
 #     链路由九步变八步。依据 docs/plan/retirement-breadth-tracker-plan.md
+#
+#  🟢 2026-10-07：接入链共振测量层，八步链 → 十步链（review §12.2 / §12.5）
+#     · 第 5 步必须排在 update_industry_factor 之后：crowd 因子读的是上一步刚写的
+#       ind_crowd_turnover_daily，顺序颠倒会拿到上一交易日的拥挤度。
+#     · 第 6 步会直接读第 5 步落盘的 industry_style_factors.parquet（不重算）。
+#     · 第 6 步退出码语义：0=探针健康，2=探针判定退化（**产物照样落盘**，日报正文
+#       会自动带「未调整（因子面板不可用）」标注）。退化不是崩链，故仍继续后续步骤。
 #
 #  成功后自动用系统文本编辑（TextEdit）打开当日报告；运行日志留存于 logs/。
 #  调试: DRY_RUN=1 bash 每日行业报告.command （只打印将执行的命令，不计算不写数据）
@@ -41,7 +50,7 @@ main() {
     PY="${PYTHON:-python3}"
 
     echo "══════════════════════════════════════════════════"
-    echo "  Industry Radar · 每日行业报告（完整版八步链）"
+    echo "  Industry Radar · 每日行业报告（完整版十步链）"
     echo "  $(date '+%Y-%m-%d %H:%M:%S')  日志: $LOG_FILE"
     echo "══════════════════════════════════════════════════"
 
@@ -94,15 +103,43 @@ main() {
         return 0
     }
 
+    # 退化感知步骤：退出码 2 =「产物已落盘，但探针判定退化」。
+    # 这不是崩链（后续步骤照常跑），但必须比普通失败更显眼—— 风格调整一旦失效，
+    # 故障形态是「悄悄退化成原始值」而非「报错」，报表照常出数且看着很健康。
+    # 故这里不并入 FAILED（不把正常日判成失败），但强制在控制台与日志里留醒目记录。
+    run_degrade_step() {
+        local desc="$1"; shift
+        echo
+        echo "──── $desc ────"
+        if [ "$DRY_RUN" = "1" ]; then
+            echo "[DRY-RUN] $*"
+            return 0
+        fi
+        "$@"
+        local rc=$?
+        if [ "$rc" -eq 2 ]; then
+            echo "🔻 [退化] $desc 返回 2：产物已落盘，但**风格调整探针未通过**"
+            echo "     ⇒ 共振数值为未调整值（含风格暴露成分），不得用于归因/ 链假设。"
+            echo "     ⇒ 日报正文会自动带退化标注；完备性检查会报 STYLE_* WARNING。"
+        elif [ "$rc" -ne 0 ]; then
+            echo "⚠️  $desc 失败 (exit=$rc)，继续后续步骤…"
+            FAILED="$FAILED
+  - $desc (exit=$rc)"
+        fi
+        return 0
+    }
+
     START=$SECONDS
-    run_step "1/8 每日成分快照"           "$PY" "scripts/build_members_daily.py"
-    run_step "2/8 行业市值加权涨跌幅"     "$PY" "scripts/compute_weighted_returns.py"
-    run_step "3/8 等权行业日频聚合"       "$PY" "scripts/build_industry_daily_full.py" "--days" "60"
-    run_step "4/8 拥挤度因子 ind_crowd"    "$PY" "scripts/update_industry_factor.py"
-    run_step "5/8 主线探测"               "$PY" "scripts/mainline_detector.py"
-    run_step "6/8 行情 regime"            "$PY" "scripts/regime_classifier.py"
-    run_step "7/8 行业走势主表(924起)"     "$PY" "scripts/build_nav_924.py"
-    run_step "8/8 生成日报 ($TRADE_DATE)" "$PY" "cron/industry_review_daily.py" "--date" "$TRADE_DATE"
+    run_step "1/10 每日成分快照"          "$PY" "scripts/build_members_daily.py"
+    run_step "2/10 行业市值加权涨跌幅"     "$PY" "scripts/compute_weighted_returns.py"
+    run_step "3/10 等权行业日频聚合"       "$PY" "scripts/build_industry_daily_full.py" "--days" "60"
+    run_step "4/10 拥挤度因子 ind_crowd"    "$PY" "scripts/update_industry_factor.py"
+    run_step "5/10 风格因子面板X/f"        "$PY" "scripts/build_style_panel.py"
+    run_degrade_step "6/10 链共振测量+探针"  "$PY" "scripts/measure_chain_resonance.py"
+    run_step "7/10 主线探测"              "$PY" "scripts/mainline_detector.py"
+    run_step "8/10 行情 regime"           "$PY" "scripts/regime_classifier.py"
+    run_step "9/10 行业走势主表(924起)"    "$PY" "scripts/build_nav_924.py"
+    run_step "10/10 生成日报 ($TRADE_DATE)" "$PY" "cron/industry_review_daily.py" "--date" "$TRADE_DATE"
 
     # ── 结果汇总 ─────────────────────────────────────────
     REPORT="$DATA_DIR/reports/daily-analysis/${TRADE_DATE}_industry_review.md"

@@ -227,6 +227,77 @@ class TestProbeDirectedBreak(unittest.TestCase):
                              "ind_code": codes, "beta_size": b})
 
 
+class TestProbeAcceptsRealPanelShape(unittest.TestCase):
+    """探针必须吃**生产实际传入的形状**（2026-10-07 源端沙箱实跑暴露的缺陷）。
+
+    背景：`scripts/measure_chain_resonance.py` 传给探针的 X 是 `build_style_panel.py`
+    落盘的**long 表**（date × ind_code × 因子），而 `probe_panel_input` 原实现隐含假设
+    X 是 wide 且末行是行业 ⇒ 真数据下直接抛
+    `AttributeError: 'Timestamp' object has no attribute 'notna'`。
+
+    这条路径此前从未被真数据走到过：`INDUSTRY_RADAR_READONLY` 只重定向**写入**，
+    第 6 步读不到第 5 步产物 ⇒ X=None ⇒ 覆盖判据整段被跳过（假绿）。
+    ⇒ 必须有测试把「long 表 + date 为索引」两种真形状钉死。
+    """
+
+    @staticmethod
+    def _long_panel(n_ind: int = 40) -> pd.DataFrame:
+        rng = np.random.default_rng(5)
+        dates = pd.to_datetime(["2024-06-03", "2024-06-04"])
+        rows = []
+        for d in dates:
+            for i in range(n_ind):
+                rec = {"date": d, "ind_code": f"I{i:03d}"}
+                for k in C.FACTORS:
+                    rec[k] = rng.normal(0, 1)
+                rows.append(rec)
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _factors() -> pd.DataFrame:
+        rng = np.random.default_rng(7)
+        idx = pd.to_datetime(["2024-06-03", "2024-06-04"])
+        return pd.DataFrame(rng.normal(0, 0.01, size=(len(idx), len(C.FACTORS))),
+                            index=idx, columns=list(C.FACTORS))
+
+    def test_long_panel_with_ind_code_is_accepted(self):
+        """生产形状（long + ind_code）必须能算出每因子当日覆盖数，且不误报。"""
+        X = self._long_panel()
+        r = PR.ProbeResult()
+        PR.probe_panel_input(self._factors(), X, r, target_date=pd.Timestamp("2024-06-04"))
+        cov = r.stats["industry_coverage_last"]
+        self.assertIsInstance(cov, dict, f"覆盖统计必须是逐因子计数，实际 {type(cov)}")
+        self.assertEqual(cov["size"], 40)
+        self.assertEqual(r.stats["industry_rows_last"], 40)
+        # 合成面板造不出 crowd 的 94/131 基线 ⇒ 允许且只允许报覆盖不足
+        codes = [i["code"] for i in r.issues]
+        self.assertTrue(set(codes) <= {"STYLE_PANEL_COVERAGE"}, codes)
+
+    def test_panel_without_ind_code_skips_coverage_without_crashing(self):
+        """无行业维度的面板（wide）谈「覆盖多少行业」无意义 ⇒ 跳过而非假报警。"""
+        X = self._factors()
+        r = PR.ProbeResult()
+        PR.probe_panel_input(self._factors(), X, r,
+                             target_date=pd.Timestamp("2024-06-04"))
+        self.assertEqual(r.stats["industry_coverage_last"], "skipped(no ind_code)")
+        self.assertEqual([i["code"] for i in r.issues], [])
+
+    def test_missing_target_date_is_a_warning_not_a_silent_pass(self):
+        """目标日没有行 ⇒ 「没跑」不等于「通过」，必须留痕。"""
+        X = self._long_panel()
+        r = PR.ProbeResult()
+        PR.probe_panel_input(self._factors(), X, r, target_date=pd.Timestamp("2024-06-05"))
+        self.assertIn("STYLE_PANEL_NO_ROWS", [i["code"] for i in r.issues])
+
+    def test_normalize_panel_handles_date_index_and_column(self):
+        a, has_a = PR._normalize_panel(self._factors())
+        self.assertTrue(has_a is False)
+        self.assertIn("date", a.columns)
+        b, has_b = PR._normalize_panel(self._long_panel())
+        self.assertTrue(has_b)
+        self.assertEqual(len(b), 80)
+
+
 class TestSpecIsDeclared(unittest.TestCase):
     def test_spec_carries_the_freedom_that_moved_three_pairs(self):
         spec = C.spec_dict()

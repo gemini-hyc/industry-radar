@@ -2,15 +2,15 @@
 # ─────────────────────────────────────────────────────────────
 #  Industry Radar · 定时入口（launchd 专用，勿双击）
 #
-#  八步链（每日行业报告.command）本身是给「人在场双击」设计的，本脚本补上
+#  十步链（每日行业报告.command）本身是给「人在场双击」设计的，本脚本补上
 #  无人值守必需的判断，职责严格分离：
 #    1. 非交易日 → 直接跳过（不做无意义空跑）
 #    2. 上游数据（market/daily + daily_basic 当日文件）未落地 → 本次跳过，
 #       等下一次触发；若已是当日最后一次触发（≥21:00）仍无数据 → 告警
 #    3. 当日已成功执行过 → 幂等退出（配合 plist 的多次触发实现「自动重试」）
-#    4. 调用八步链（SCHEDULED=1 静默模式，不弹 TextEdit）
+#    4. 调用十步链（SCHEDULED=1 静默模式，不弹 TextEdit）
 #    5. 读 completeness_status.json 核对结果（除退出码外的第二道判据）
-#    6. 失败 / 有警告 / 数据陈旧 → 发 macOS 系统通知
+#    6. 失败 / 有警告 / 数据陈旧 → 发macOS 系统通知
 #
 #  ⚠️ 编码约定：变量引用后若紧跟中文全角标点，必须写成 ${VAR} 形式。
 #     全角标点是多字节 UTF-8，bash 会把它并入变量名导致 unbound variable。
@@ -21,8 +21,8 @@
 #
 #  日志分散在两个目录，各司其职：
 #    ① 本脚本的 stdout/stderr → /Users/hyc/quant-data/logs/industry-radar-scheduled.log
-#       （由 plist 的 StandardOutPath 兜住；只看这一个就知道今天跑没跑、成没成）
-#    ② 八步链内部的详细日志 → /Users/hyc/quant/industry-radar/logs/scheduled_*.log
+#       （由 plist 的StandardOutPath 兜住；只看这一个就知道今天跑没跑、成没成）
+#    ② 十步链内部的详细日志 → /Users/hyc/quant/industry-radar/logs/scheduled_*.log
 #       幂等标记也在该目录: logs/.scheduled_done_YYYY-MM-DD
 # ─────────────────────────────────────────────────────────────
 set -u
@@ -83,8 +83,8 @@ if [ ! -f "$DATA_DIR/market/daily/$TODAY.parquet" ] || [ ! -f "$DATA_DIR/daily_b
     exit 0
 fi
 
-# ── 5. 执行八步链（静默）──
-log "▶ 开始执行八步链（静默）→ $RUN_LOG"
+# ── 5. 执行十步链（静默）──
+log "▶ 开始执行十步链（静默）→ $RUN_LOG"
 SCHEDULED=1 PYTHON="$PY" bash "$PROJECT_DIR/每日行业报告.command" > "$RUN_LOG" 2>&1
 RC=$?
 

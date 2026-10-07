@@ -66,6 +66,39 @@ def _add(res: ProbeResult, code: str, detail: str, level: str = "critical") -> N
 
 
 # ─────────────────── ① 主探测器：输入端（面板 + β + 因子数）───────────────────
+def _normalize_panel(X: Optional[pd.DataFrame]):
+    """把特征面板统一成 **long** 形态并回报它是否带行业维度。
+
+    入参可能是两种形态：
+      · **long**（`scripts/build_style_panel.py` 落盘的一等产物：date / ind_code / 因子列）
+      · **wide**（date 为索引、每列一个因子；无行业维度）
+
+    ⚠️ 为什么要显式归一（2026-10-07源端沙箱实跑暴露）：
+    探针的覆盖判据要回答的是「**某个交易日**、每个因子覆盖了**多少个行业**」，
+    这只在 long 形态下可直接数。原实现直接 `X.iloc[-1][c].notna().sum()`，
+    隐含假设 X 是 wide 且末行是行业 —— 实际生产传进来的是 long，
+    于是取到的是「最后一个行业那一行」的标量 `.notna()`，直接抛
+    `AttributeError: 'Timestamp' object has no attribute 'notna'`。
+    这条路径此前从未被真数据走到过（写重定向模式下第 5 步产物读不到 ⇒ X=None）。
+
+    返回 (long_df, has_ind)；has_ind=False（无行业维度）时**跳过覆盖判据** ——
+    对每列只有 1 个观测的面板谈「覆盖多少行业」没有意义，硬算只会假报警。
+    """
+    if X is None or len(X) == 0:
+        return None, False
+    has_ind = "ind_code" in X.columns
+    out = X.copy()
+    if "date" not in out.columns:
+        # ⚠️ 索引**无名**时 reset_index 产出的列名是 "index"，不是 "date" ——
+        #   直接按 "date" 去rename 会静默不改名，随后 KeyError。
+        idx_name = out.index.name
+        out = out.reset_index()
+        if "date" not in out.columns:
+            out = out.rename(columns={idx_name or "index": "date"})
+    out["date"] = pd.to_datetime(out["date"])
+    return out, has_ind
+
+
 def probe_panel_input(F: pd.DataFrame, X: Optional[pd.DataFrame], res: ProbeResult,
                       target_date=None, panel_name: str = "style_factors") -> None:
     """覆盖 / 新鲜度 / 是否退化为一个常数。
@@ -87,20 +120,30 @@ def probe_panel_input(F: pd.DataFrame, X: Optional[pd.DataFrame], res: ProbeResu
              f"{panel_name} 最新 {dates.max().date()}，落后目标日 {lag} 天"
              f"（上限 {C.MAX_PANEL_LAG_DAYS}）")
 
-    if X is not None and len(X):
-        tail = X.tail(C.WINDOW_DAYS)
-        cov = {c: int(tail[c].notna().any() and tail[c].count() > 0) for c in X.columns}
-        last_row = X.iloc[-1]
-        res.stats["industry_coverage_last"] = {
-            c: int(last_row[c].notna().sum()) for c in X.columns}
-        for c, n in res.stats["industry_coverage_last"].items():
-            base = C.FACTOR_EXPECTED_INDUSTRIES.get(c)
-            if base is None:
-                continue
-            if n / base < C.MIN_COVERAGE_RATIO:
-                _add(res, "STYLE_PANEL_COVERAGE",
-                     f"因子 {c} 当日只覆盖 {n}/{base} 个行业（< "
-                     f"{C.MIN_COVERAGE_RATIO:.0%} 基线）")
+    Xl, has_ind = _normalize_panel(X)
+    if Xl is not None and has_ind:
+        factor_cols = [c for c in C.FACTORS if c in Xl.columns]
+        day = Xl[Xl["date"] == td]
+        if day.empty:
+            res.stats["industry_coverage_last"] = {}
+            _add(res, "STYLE_PANEL_NO_ROWS",
+                 f"特征面板没有 {td.date()} 的行 ⇒ 当日覆盖无从判断",
+                 level="warning")
+        else:
+            cov = {c: int(day[c].notna().sum()) for c in factor_cols}
+            res.stats["industry_coverage_last"] = cov
+            res.stats["industry_rows_last"] = int(day["ind_code"].nunique())
+            for c, n in cov.items():
+                base = C.FACTOR_EXPECTED_INDUSTRIES.get(c)
+                if base is None:
+                    continue
+                if n / base < C.MIN_COVERAGE_RATIO:
+                    _add(res, "STYLE_PANEL_COVERAGE",
+                         f"因子 {c} 当日只覆盖 {n}/{base} 个行业（< "
+                         f"{C.MIN_COVERAGE_RATIO:.0%} 基线）")
+    elif Xl is not None:
+        # 无行业维度 ⇒ 覆盖判据不适用，只留痕不报警（避免用错口径制造假阳性）
+        res.stats["industry_coverage_last"] = "skipped(no ind_code)"
 
     # β 面板非退化：因子列不能是常数，也不能全 NaN
     stds = F.std(ddof=0)
