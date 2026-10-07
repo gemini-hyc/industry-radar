@@ -572,6 +572,62 @@ def check_breadth(t: pd.Timestamp):
         return [issue(WARNING, "BREADTH_PROBE_FAIL", f"宽度异常检查异常: {e}")], {}
 
 
+STYLE_PROBE_PATH = INDUSTRY_DIR / "style_probe_status.json"
+STYLE_PROBE_MAX_LAG_DAYS = 5   # 探针状态落后目标日超过此天数 ⇒ 视为没跑（不是"通过"）
+
+
+def check_style_probe(t: pd.Timestamp):
+    """5c. **风格调整的退化探针**状态（review §12.5，2026-10-07 接入）。
+
+    为什么进完备性检查：风格调整一旦失效，**故障不是变垃圾，而是悄悄退化成原始值**
+    —— 报表照常出数、看着很健康（BREADTH_ZERO 的同型病）。只写日志不算，必须**可见**。
+
+    三条判据（均为 **WARNING**，与 PROV_MISSING 同级 ⇒ 参与退出码、但不把正常日变失败）：
+      ① 状态文件缺失 / 落后 ⇒ 说明测量层没跑（**没跑 ≠ 通过**）；
+      ② `ok=false` ⇒ 探针判定退化 ⇒ 日报必须带「未调整（因子面板不可用）」标注；
+      ③ 只统计 warning 级 issue 时不判失败（它们是"需要看一眼"，不是"数据错了"）。
+    """
+    if not STYLE_PROBE_PATH.exists():
+        return [issue(
+            WARNING, "STYLE_PROBE_MISSING",
+            "风格调整探针状态不存在（industry/style_probe_status.json）"
+            " ⇒ 未跑 scripts/measure_chain_resonance.py；**没跑不等于通过**",
+            fix="在日更链里跑 scripts/measure_chain_resonance.py（它会同时产出探针状态）",
+            date=str(t.date()))], {"status": "missing"}
+    try:
+        st = json.loads(STYLE_PROBE_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        return [issue(WARNING, "STYLE_PROBE_UNREADABLE",
+                     f"探针状态解析失败: {e}", fix="重跑 scripts/measure_chain_resonance.py",
+                     date=str(t.date()))], {"status": "unreadable"}
+
+    stats = {"status": "ok" if st.get("ok") else "degraded",
+             "target_date": st.get("target_date"),
+             "n_issues": len(st.get("issues") or [])}
+    out = []
+    td = st.get("target_date")
+    if td:
+        lag = (t - pd.Timestamp(td)).days
+        stats["lag_days"] = lag
+        if lag > STYLE_PROBE_MAX_LAG_DAYS:
+            out.append(issue(
+                WARNING, "STYLE_PROBE_STALE",
+                f"探针状态停在 {td}，落后目标日 {lag} 天（>{STYLE_PROBE_MAX_LAG_DAYS}）",
+                fix="重跑 scripts/measure_chain_resonance.py",
+                date=str(t.date())))
+    if not st.get("ok"):
+        codes = [i.get("code") for i in (st.get("issues") or [])]
+        out.append(issue(
+            WARNING, "STYLE_PANEL_DEGRADED",
+            f"风格调整探针判定**退化**（{', '.join(codes)}）"
+            f" ⇒ 共振强度回落为**未调整值**，日报正文必须标注"
+            f"「未调整（因子面板不可用）」，且**不得用于归因/链假设**",
+            fix="先查因子面板覆盖与新鲜度（面板故障的典型形态是'悄悄退化成原始值'，"
+                "不是变垃圾）；修好后重跑",
+            date=str(t.date()), codes=codes))
+    return out, stats
+
+
 # ─────────────────────── 产物指纹（provenance）───────────────────────
 def check_provenance():
     """6. 已登记产物是否带 <文件名>.meta.json 指纹。
@@ -742,6 +798,9 @@ def main():
     bd_issues, bd_stats = check_breadth(t)
     issues += bd_issues
     report["summary"]["breadth"] = bd_stats
+    sp_issues, sp_stats = check_style_probe(t)
+    issues += sp_issues
+    report["summary"]["style_probe"] = sp_stats
     pv_issues, pv_stats = check_provenance()
     issues += pv_issues
     report["summary"]["provenance"] = pv_stats
@@ -800,6 +859,16 @@ def print_report(report: dict, msg: str = ""):
                     bits.append("空值: " + ",".join(empty))
                 if bits:
                     print("  情绪数据  : " + " / ".join(bits))
+            sp = s.get("style_probe") or {}
+            if sp:
+                bits = [f"状态 {sp.get('status')}"]
+                if sp.get("target_date"):
+                    bits.append(f"测量日 {sp['target_date']}")
+                if sp.get("lag_days") is not None:
+                    bits.append(f"滞后 {sp['lag_days']} 天")
+                if sp.get("n_issues"):
+                    bits.append(f"探针告警 {sp['n_issues']} 条")
+                print("  风格探针  : " + " / ".join(bits))
             pv = s.get("provenance") or {}
             if pv.get("checked"):
                 extra_txt = ""

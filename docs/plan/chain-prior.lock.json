@@ -1,0 +1,12 @@
+{
+  "list_file": "docs/plan/chain-prior-list.csv",
+  "sha256": "83388742711a391caa2312285aa452eafa12ce5d5d0fd90c5899648fe73e3c96",
+  "source": "ETF 持仓篮子（第三方编制）：industry/etf_holdings/，机械过滤=去重复指纹组+持仓>300+成员权重≥5%+可映射覆盖率≥60%",
+  "author": "tools/build_chain_prior_from_etf.py（程序推导，无逐条挑选；过滤规则 post-hoc）",
+  "locked_at": "2026-10-07T08:08:38+08:00",
+  "n_chains": 74,
+  "n_members": 335,
+  "source_sha256": "ccaa7643fb342079f14b63cc02fadec15a238f35a73adb13a7b8d6dedb115cfc",
+  "derivation_rules": "drop_duplicate_fingerprint=True; max_holdings=300; min_member_weight=5.0; min_members=2; max_members=8; min_industry_coverage=60.0",
+  "post_hoc": true
+}

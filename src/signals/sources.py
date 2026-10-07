@@ -8,8 +8,11 @@
        且引擎自身 entry 事件 h=20 按日聚类 t=−2.87
    二者的**历史行保留**在台账里（2,234 + 21 条），状态标 `retired`，只为可追溯。
 
-**唯一在册来源**：`mainline`（仅向前留痕）—— 主线方向群每日状态，
+**唯一在册来源**：`mainline`（每日状态快照）—— 主线方向群每日状态，
    状态文件只保存当前值、历史无法无损重建，故由日频链路每日快照入账。
+   🔴 2026-10-07：`mainline` 由 `pending` 改 **`observational`** —— §2.2 判定其
+   全市场相关聚类 = beta 聚合产物（**测错对象**），保留入账**仅为留痕与日报连续性**；
+   ⛔ `status_note` 硬约束：**其台账评估结果不得用于支撑或否定任何链假设**。
 
 原「可历史回填」类别的冷区实现（`cold_zone_history` 及其对
 `factor_width_reversal.detect_signals` 的复用）已移除 —— 它曾保证
@@ -101,10 +104,21 @@ SOURCE_SPECS: Dict[str, Dict] = {
         "label": "主线方向成员行业（每日状态）",
         "score_hint": "heat_ratio 热度，越大越强",
         "direction": "desc",
-        "status": "pending",
-        "status_short": "仅向前样本，规模不足以评估",
-        "status_note": "每日状态快照，只有向前样本，尚未积累到可评估规模。",
-        # ⚠️ 待办：本来源尚未按五条门槛评估（见 docs/indicator-status-register.md §8-4）
+        # 🔴 2026-10-07 由 pending 改 observational（review §12.3，主人已批准）。
+        #    原因：方法论 §2.2 判定其全市场相关聚类 = beta 聚合产物，即「测错对象」。
+        #    ⚠️ 五个字段必须同时改 —— 只改 status 会让定位表仍显示"样本不足"，语义是错的。
+        #    （pending 的语义是"样本够了就有结论"，而这里的结论已下：方法本身错了。）
+        "status": "observational",
+        "status_since": "2026-10-06",
+        "status_doc": "docs/plan/chain-clustering-review.md",
+        "status_short": "方法已被判定「测错对象」，待重建；⛔ 不得用于链假设",
+        "status_note": (
+            "方法论 §2.2 判定其全市场相关聚类 = beta 聚合产物（58 行业巨群 / 群随数据漂移），"
+            "即「测错对象」；改造方向 = 链内残差 + 最小成员数 + 共振强度连续量（未执行，须立项）。"
+            "⛔ 其台账评估结果不得用于支撑或否定任何链假设 —— 因为它测的对象本身是错的"
+            "（前车之鉴：wake_backtest_results.csv 的 status=tracking 两行曾被当作证据）。"
+            "保留入账仅为留痕与日报连续性；不得通过调参「修复」。"
+        ),
     },
 }
 

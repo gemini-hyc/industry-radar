@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -159,16 +160,86 @@ def format_regime_section(trade_date: str) -> str:
 #    宽度仍作为**数据探针**保留在 market_data.py / check_data_completeness.py，
 #    依据 docs/plan/retirement-breadth-tracker-plan.md §2.3/§6）
 
+# ── 二点五、链共振（测量层 · 2026-10-07 新增）──────────────────
+
+CHAIN_RESONANCE_PATH = INDUSTRY_DIR / "chain_resonance_daily.csv"
+STYLE_PROBE_PATH = INDUSTRY_DIR / "style_probe_status.json"
+
+
+def format_chain_resonance_section(trade_date: str, top_n: int = 8) -> str:
+    """链共振强度（**状态描述 = 原始值**）+ 风格解释份额 + 退化标注。
+
+    三条纪律（review §12.2 / §12.5）：
+      ① 日报用**原始值**（§3.3：日频层 = 状态描述）；调整值留给研究/归因；
+      ② 「**原始 − 调整**」差额（风格解释份额）**必须可见**，不在测量层静默抹平；
+      ③ 因子面板退化时**要在报告正文说出来**（只写日志不算）—— 这就是 `banner()` 的作用。
+    """
+    lines: List[str] = ["🔗 **三、链共振强度**（语义先验链 × 残差共振）", ""]
+    try:
+        df = pd.read_csv(CHAIN_RESONANCE_PATH)
+    except Exception as e:
+        logger.warning("链共振表读取失败: %s", e)
+        lines += [f"> ⚠️ 链共振表读取失败（{CHAIN_RESONANCE_PATH.name}）：{e} —"
+                  f"本章节依赖 scripts/measure_chain_resonance.py，未跑即无此表。", ""]
+        return "\n".join(lines)
+
+    # ① 退化标注先行（失败要"响"）
+    try:
+        st = json.loads(Path(STYLE_PROBE_PATH).read_text(encoding="utf-8"))
+    except Exception:
+        st = None
+    if st is not None and not st.get("ok"):
+        codes = "、".join(i.get("code", "?") for i in (st.get("issues") or []))
+        lines += [
+            f"> ⚠️ **本节的共振强度为未调整值（因子面板不可用：{codes}）**",
+            "> ⇒ 该数值包含风格暴露成分，**不得用于归因 / 链假设**；仅作「今日发生了什么」的状态描述。",
+            "",
+        ]
+
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    day = df[df["date"] <= trade_date]
+    if day.empty:
+        lines += [f"> 未找到 ≤{trade_date} 的测量行。", ""]
+        return "\n".join(lines)
+    last = day["date"].max()
+    d = day[day["date"] == last].copy()
+
+    share = d["style_share"] if "style_share" in d.columns else None
+    if share is not None and len(share):
+        lines += [
+            f"**测量日 {last}** ｜ 链 {len(d)} 条 ｜ 风格解释份额（原始−调整）："
+            f"均值 **{share.mean():+.3f}** / 中位 **{share.median():+.3f}** / 最大 **{share.max():+.3f}**",
+            "",
+        ]
+    lines += [
+        "| 链 | 成员 | 原始共振 | 调整后 | 风格份额 | 分层 z |",
+        "|:---|---:|---:|---:|---:|---:|",
+    ]
+    cols = [c for c in ("resonance_raw", "resonance_adj", "style_share", "z_adj")
+            if c in d.columns]
+    for _, r in d.sort_values("resonance_raw", ascending=False).head(top_n).iterrows():
+        row = [f"| {str(r.get('chain_id', '—'))[:22]} | {_fmt(r.get('n_members'), '.0f')} |"]
+        for c in ("resonance_raw", "resonance_adj", "style_share", "z_adj"):
+            row.append(f" {_fmt(r.get(c) if c in d.columns else None, '+.3f')} |"
+                       if c in cols else " — |")
+        lines.append("".join(row))
+    lines += ["", "> 原始共振 = 只剥市场 beta；调整后 = 再剥 5 个风格因子。**跨链比较请看 z 列**"
+                  "（群内均值随群规模稀释 ⇒ 标量只在**同一条链**内跨时间可比）。", ""]
+    return "\n".join(lines)
+
+
 # ── 组装与落盘 ────────────────────────────────────────────
 
 def build_extra_sections(trade_date: str) -> str:
-    """渲染附加章节（主线状态 / 行情 regime），用分隔线与主报告衔接。
+    """渲染附加章节（主线状态 / 行情 regime / 链共振），用分隔线与主报告衔接。
 
     🔴 2026-10-06：反转跟踪池、冷区资金面参考、宽度状态三节已随对应来源弃用而移除。
+    🆕 2026-10-07：新增链共振（测量层）；缺表时降级为一行提示，不影响主报告。
     """
     parts = [
         format_mainline_section(trade_date),
         format_regime_section(trade_date),
+        format_chain_resonance_section(trade_date),
     ]
     blocks: List[str] = []
     for part in parts:

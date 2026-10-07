@@ -58,13 +58,17 @@ from src.evaluation import (  # noqa: F401
     ts_quantile,
 )
 
-# 兼容旧名：Series 口径的 nonoverlap_t 现名 nonoverlap_t_on_index
-nonoverlap_t = nonoverlap_t_on_index
+# 🔴 2026-10-07：原名 `nonoverlap_t = nonoverlap_t_on_index` 的兼容别名**已删除**。
+#    它是收敛后残留的最后一个「同名不同义」陷阱：
+#      `src.signals.evaluate.nonoverlap_t`      = **按日期去重**的事件流口径
+#      `src.research.breadth_eval.nonoverlap_t` = **位置切片**的 Series 口径（旧别名）
+#    两者同名、语义不同、导入错模块也不报错 ⇒ 与本项目已经翻过三次车同源。
+#    现一律使用无歧义名字：`nonoverlap_t_on_index` / `nonoverlap_t_sorted`。
 
 __all__ = [
     "MIN_STOCKS",
     "cs_rank_ic",
-    "nonoverlap_t",
+    "nonoverlap_t_sorted",
     "cluster_se",
     "ts_quantile",
     "build_panel",
@@ -72,7 +76,6 @@ __all__ = [
     "breadth_forward_vol_ic",
     "breadth_forward_return_ic",
     "tail_concentration",
-    "nonoverlap_t_sorted",
 ]
 
 # 成分数下限。低于此值，breadth 的分母（MA 已成型的个股数）过小，
@@ -137,7 +140,7 @@ def breadth_forward_return_ic(panel: dict[str, pd.DataFrame], horizon: int = 20)
     sig = panel["breadth"]
     fwd = forward_sum(panel["exc"], horizon)
     ic = cs_rank_ic(sig, fwd)
-    t_no, n_no = nonoverlap_t(ic, horizon)
+    t_no, n_no = nonoverlap_t_sorted(ic, horizon)
     return ICResult(n_days=len(ic), ic_mean=float(ic.mean()),
                     t_naive=float(ic.mean() * np.sqrt(len(ic)) / ic.std()),
                     t_nonoverlap=t_no, pos_ratio=float((ic > 0).mean()),
@@ -155,7 +158,7 @@ def breadth_forward_vol_ic(panel: dict[str, pd.DataFrame], horizon: int = 20) ->
     sig = panel["breadth"]
     fwd_vol = panel["exc"].rolling(horizon, min_periods=horizon).std().shift(-horizon)
     ic = cs_rank_ic(sig, fwd_vol)
-    t_no, n_no = nonoverlap_t(ic, horizon)
+    t_no, n_no = nonoverlap_t_sorted(ic, horizon)
     return ICResult(n_days=len(ic), ic_mean=float(ic.mean()),
                     t_naive=float(ic.mean() * np.sqrt(len(ic)) / ic.std()),
                     t_nonoverlap=t_no, pos_ratio=float((ic > 0).mean()),

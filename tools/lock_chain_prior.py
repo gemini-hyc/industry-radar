@@ -42,9 +42,33 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
+def _read_rows(path: Path) -> list[dict]:
+    """读名单 CSV，**跳过 `#` 注释行**。
+
+    2026-10-07：程序推导的名单（`tools/build_chain_prior_from_etf.py`）会在顶部写
+    生成脚本/日期/过滤规则等 `#` 注释行（project 的 provenance 风格）。注释行对机器不可见、
+    对人可见 —— 这样做保留了可追溯性，代价是本函数必须显式跳过它们。
+    """
+    import io
+    text = path.read_text(encoding="utf-8")
+    body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    return list(csv.DictReader(io.StringIO(body)))
+
+
+def header_meta(path: Path) -> dict:
+    """提取名单头部的 `# key: value` 元信息（源文件哈希等），供锁定记录附带。"""
+    meta = {}
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        if not ln.startswith("#"):
+            break
+        if ":" in ln:
+            k, v = ln[1:].split(":", 1)
+            meta[k.strip()] = v.strip()
+    return meta
+
+
 def summarize(path: Path) -> dict:
-    with path.open(newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+    rows = _read_rows(path)
     if not rows:
         raise SystemExit(f"名单为空：{path}（至少要有表头之外的一行）")
     req = {"chain_id", "chain_name", "ind_code"}
@@ -93,6 +117,13 @@ def main() -> int:
                "source": a.source, "author": a.author,
                "locked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                "n_chains": info["n_chains"], "n_members": info["n_members"]}
+        hm = header_meta(p)
+        if hm.get("源文件sha256"):          # 清单自带的**数据源**哈希 ≠ 名单文件哈希
+            rec["source_sha256"] = hm["源文件sha256"]
+        if hm.get("过滤规则"):
+            rec["derivation_rules"] = hm["过滤规则"]
+        if hm.get("⚠️ post-hoc") or hm.get("post-hoc"):
+            rec["post_hoc"] = True
         LOCK.write_text(json.dumps(rec, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8")
         print(f"✅ 已锁定 → {LOCK}")

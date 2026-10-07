@@ -88,10 +88,19 @@ ARTIFACTS = {
     "ind_crowd_turnover_daily":  (FACTOR_DIR / "ind_crowd_turnover_daily.parquet", "derived"),
     "industry_margin_daily":     (SIGNALS_DIR / "industry_margin_daily.parquet", "derived"),
     "signals_log":               (SIGNALS_LOG_PATH, "derived"),
+    # ── 链共振测量层（2026-10-07，review §12.2「复现三件套」─ 三件都登记）──
+    #   特征 X_{i,k,t} / 因子收益 f_{k,t} / 残差面板 r̃；(链,日) 双输出与探针状态一并登记，
+    #   否则完备性检查的 --audit-writes 会把它们报成「未登记写入」。
+    "industry_style_panel":      (INDUSTRY_DIR / "industry_style_panel.parquet", "derived"),
+    "industry_style_factors":    (INDUSTRY_DIR / "industry_style_factors.parquet", "derived"),
+    "industry_residual_panel":   (INDUSTRY_DIR / "industry_residual_panel.parquet", "derived"),
+    "chain_resonance_daily":     (INDUSTRY_DIR / "chain_resonance_daily.csv", "derived"),
     # ── cache：中间缓存 ──
     "industry_daily_cache":      (INDUSTRY_DIR / "industry_daily.parquet", "cache"),
     # ── status：运行状态记录（非数据产物，登记只为免被审计误报）──
     "completeness_status":       (INDUSTRY_DIR / "completeness_status.json", "status"),
+    # 风格调整共振的**退化探针**状态：ok=False ⇒ check_data_completeness 报 STYLE_PANEL_DEGRADED
+    "style_probe_status":        (INDUSTRY_DIR / "style_probe_status.json", "status"),
     # ── fetched：外部抓取原料 ──
     "index_member_all_raw":      (INDUSTRY_DIR / "index_member_all_raw.parquet", "fetched"),
     "industry_list":             (INDUSTRY_DIR / "industry_list.parquet", "fetched"),

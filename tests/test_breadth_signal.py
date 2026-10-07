@@ -44,7 +44,7 @@ from src.research.breadth_eval import (
     build_panel,
     cluster_se,
     cs_rank_ic,
-    nonoverlap_t,
+    nonoverlap_t_on_index,
     nonoverlap_t_sorted,
     tail_concentration,
     ts_quantile,
@@ -454,10 +454,10 @@ class TestBreadthVerdictReported(unittest.TestCase):
 
     def test_nonoverlap_t_helper_rejects_short_series(self):
         ic = pd.Series(np.random.default_rng(1).normal(size=100))
-        t, n = nonoverlap_t(ic, 20)
+        t, n = nonoverlap_t_on_index(ic, 20)
         self.assertEqual(n, 5, "每 20 日取 1 个 ⇒ 100 个观测应得 5 个")
         self.assertTrue(np.isfinite(t))
-        t2, n2 = nonoverlap_t(ic, 5000)
+        t2, n2 = nonoverlap_t_on_index(ic, 5000)
         self.assertTrue(np.isnan(t2) and n2 <= 1,
                         "步长超过序列长度时必须返回 NaN 而不是算出假 t")
 
@@ -558,7 +558,7 @@ class TestNonoverlapTSortingTrap(unittest.TestCase):
         vals = pd.Series(rng.normal(0, 1, 120), index=dates)
         shuffled = vals.sample(frac=1.0, random_state=1)      # 打乱索引顺序
         t_sorted, n_sorted = nonoverlap_t_sorted(vals, 20)
-        t_bad, n_bad = nonoverlap_t(shuffled, 20)
+        t_bad, n_bad = nonoverlap_t_on_index(shuffled, 20)
         self.assertEqual(n_sorted, 6, "120 个观测 / 步长 20 = 6")
         self.assertEqual(n_bad, 6, "样本数相同 —— 错的只是抽到了哪些")
         self.assertNotAlmostEqual(t_sorted, t_bad, places=3,
@@ -571,7 +571,7 @@ class TestNonoverlapTSortingTrap(unittest.TestCase):
         vals = pd.Series(rng.normal(0, 1, 200), index=dates).sample(
             frac=1.0, random_state=2)
         t1, n1 = nonoverlap_t_sorted(vals, 20)
-        t2, n2 = nonoverlap_t(vals.sort_index(), 20)
+        t2, n2 = nonoverlap_t_on_index(vals.sort_index(), 20)
         self.assertEqual(n1, n2)
         self.assertAlmostEqual(t1, t2, places=12,
                                msg="nonoverlap_t_sorted 必须等价于「先排序再调用」")

@@ -72,31 +72,83 @@
 **噪声期望**：结构类在 5% 水平下的纯噪声期望 = 217 × 0.05 ≈ **11** ⇒ 超额 **+34** 对才是真结构证据。
 ⚠️ **报告纪律**：一律写「实测 X 对 **vs 噪声期望 Y 对**」，不写「X 对稳定」。
 
-## ⑦ 先验名单（来源 / 锁定日期 / 哈希）
+## ⑦ 先验名单（来源 / 作者 / 发布日期 / 锁定哈希 / **是否事后撰写**）
 
-| 项 | 状态 |
+> ✅ **2026-10-07 已锁定**（`docs/plan/chain-prior.lock.json`）。⚠️ 本节**推翻**了 2026-10-06
+> "etf_holdings 一律不得用作先验源"的结论 —— 见下面「自我更正」。
+
+| 项 | 取值 |
 |:--|:--|
-| 文件 | `docs/plan/chain-prior-list.csv`（**待主人撰写**） |
-| 来源 | 申万语义（`industry/index_member_all_raw.parquet` 的 L1/L2/L3 层级）+ 主人业务判断 |
-| 锁定日期 | ⬜ 未锁定 |
-| sha256 | ⬜ 未锁定 |
-| ⛔ `industry/etf_holdings/` | **不得用作先验源** —— 2026-10-06 抽检：原始持仓篮子本身即污染（详见 `docs/plan/chain-clustering-review.md` §12 与本文档 §4.3 更新） |
+| 文件 | `docs/plan/chain-prior-list.csv`（74 条链 / 335 行成员） |
+| **来源** | **第三方编制的 ETF 持仓篮子**：`industry/etf_holdings/`（`etf_holdings_detail/summary.parquet`，`source=csindex`） |
+| 作者 | `tools/build_chain_prior_from_etf.py`（**程序推导，无逐条挑选**） |
+| 发布日期 | 篮子文件的**发布日期未记录**（parquet 无日期列）⇒ 以**抓取/落盘日**代替，须与源端核对 |
+| 名单 sha256 | `83388742711a391caa2312285aa452eafa12ce5d5fd90c5899648fe73e3c96`（前 12 位 `83388742711a…`） |
+| **数据源 sha256** | `ccaa7643fb342079f14b63cc02fadec15a238f35a73adb13a7b8d6dedb115cfc`（summary+detail 拼接） |
+| **是否在看过幸存对之后撰写** | ⚠️ **是**（过滤规则由研究员在看过 7 对幸存名单之后编写）⇒ 按 §12.6 只能作 **① 对象清单（定义"要测量哪些群"）** 与 **② 方法能否复现已知篮子的佐证**；⛔ **不得用于命中率 / 漏检率检验** |
+| 锁定日期 | 2026-10-07 |
 
-> ⛔ **执行铁律**：先验名单必须**落盘并锁定（git commit 或记 sha256）之后**才能跑群级验证。
-> 研究员已看过幸存名单 ⇒ **凭记忆写的"事前名单"必然被污染，命中率必被高估**。
+**推导规则（写死在 `tools/build_chain_prior_from_etf.py::RULES`，与名单一起锁定）**：
+去重复指纹组 + 持仓 ≤300 + 成员权重 ≥5% + 成员数 2~8 + 可映射覆盖率 ≥60%。
+
+> ⛔ **执行铁律**：先验名单必须**落盘并锁定之后**才能跑群级测量
+> （`scripts/measure_chain_resonance.py` 会校验哈希，不符即拒绝执行）。
+
+### ⑦-b 自我更正：etf_holdings 在**机械过滤后**可用（2026-10-07）
+
+2026-10-06 判"原始篮子污染 ⇒ 一律不得用作先验源"。**该判断对全集成立、对子集过严**：
+
+| 检查 | 全集（249 只） | 机械过滤后（134 只） |
+|:--|:--|:--|
+| 重复指纹组（同指数被错配给多只 ETF） | 32 组 / 114 只（46%） | 0 |
+| 持仓数 > 300 | 19 只 | 0 |
+| 名称含主题词者的**语义一致率** | 79%（58 只中 12 只不一致） | **94%**（34 只中 2 只；复核后这 2 只是**正则漏字**：环保 ETF 持光伏/电力属中证环保口径、钢铁 ETF 第一大行业"普钢"是钢铁子类） |
+
+⇒ **修正后的处置**：`etf_holdings` **可以**作外部先验源，但**必须与过滤 spec 一起锁定**
+（过滤规则本身就是口径的一部分）。⛔ 仍不可用于命中率检验（规则系事后编写）。
 
 ---
+
+## ⑧ 测量层 spec（2026-10-07 新增，裁决①/② 落地 · 唯一实现 = `src/resonance/config.py`）
+
+| 项 | 取值 |
+|:--|:--|
+| 单位 | **群** = (链, 日) 一个标量 = 群内**带符号**残差相关均值 |
+| 因子集 / K | `size, value, mom20, vol20, crowd` ⇒ **K=5** |
+| β 估计窗口 | **250 交易日**，用 [t−W, t−1] 估计、**作用在 t**（out-of-sample） |
+| **标准化作用域** | **每日横截面 z-score**（`cross_section_daily`）⚠️ 这个自由度实测能动 3 对 |
+| 是否带截距 | 是（带 ⇒ 残差自动剥离等权市场收益） |
+| 残差化层次 | **收益层**（`r̃ = r − Σβf`），不在相关层做偏相关 |
+| 零分布 | L1 **分层**抽取，2,000 次，seed 20261006 |
+| 输出 | `resonance_raw` / `resonance_adj` / `style_share`（= raw−adj）/ `z_adj` |
+
+**复现三件套**（缺一即"派生"不可复现）：`industry_style_factors.parquet`（① 因子面板）
++ `industry_residual_panel.parquet`（② 残差面板）+ **meta 里的 spec**（③，含上表全部字段）。
+
+**探针 spec**：主探测器在**输入端**（面板覆盖按因子基线 / 新鲜度 / β 非退化 / **当日实际纳入因子数 == K**）；
+正交性用**相对口径** `|corr|adj/|corr|raw ≤ 0.75`（绝对判据在 out-of-sample 残差上不成立：健康样本
+|corr| 就有 0.05~0.11），且只对**原始暴露 ≥0.05** 的因子生效；差额降为长窗口佐证；
+**金丝雀链** = size β 同向极值 4 行业（实测 raw 0.699 → adj 0.276 = 0.395；失效则 =1.0）。
 
 ## 复现命令（只读；不写数据根）
 
 ```bash
 /Users/hyc/Quant/stock-doctor/.venv/bin/python research/chain_three_class_qtest.py
     # → 217 / 486-484-666 / 45·33·12·127 / 旧口径 167 与 67(含22) / 结构类 L1 分解
-    # 逐对结果落 ~/quant-data/_local_dev/chain_three_class_qtest_2026-10-06.csv
 
-/Users/hyc/Quant/stock-doctor/.venv/bin/python research/chain_null_distribution.py
-    # → 分层 vs 全局零分布对照（§11.3 的量化理由）
+/Users/hyc/Quant/stock-doctor/.venv/bin/python -m src.resonance.group
+    # → 分层 vs 全局零分布对照（§11.3 的量化理由；已从 research/ 迁入生产包）
+
+/Users/hyc/Quant/stock-doctor/.venv/bin/python scripts/build_style_panel.py       # ① 因子面板
+/Users/hyc/Quant/stock-doctor/.venv/bin/python scripts/measure_chain_resonance.py # ③ (链,日) 双输出 + 探针
+
+/Users/hyc/Quant/stock-doctor/.venv/bin/python tools/build_chain_prior_from_etf.py --probe
+    # → 先验源抽检（249 → 134 干净子集 → 74 条链；主题词语义一致率 100%）
 ```
 
-**已知未锁定项（下次开工前必须补）**：先验名单（⑦）｜风格因子面板（护栏 3 的输入，尚未建）｜
-`industry_members_daily` 仅 490 天 vs 面板 1,636 天（前 ~1,150 天静态成分，结构性结论须一并体检）。
+**已知缺口（下次开工前必须补）**：
+① `value`（行业中位 PB 由本模块用静态成分聚合）—— 数据根**没有**行业层估值表，review §11.7
+所说"均现成"**不成立**，已如实记录；
+② `crowd` 源表只覆盖 **94/131** 个行业且起于 2020-02-20 ⇒ 覆盖判据改为按因子基线（否则天天假报）；
+③ `industry_members_daily` 仅 490 天 vs 面板 1,636 天（前 ~1,150 天静态成分，结构性结论须一并体检）；
+④ 先验名单的**发布日期**未在源文件里记录，需与源端核对。

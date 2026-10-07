@@ -4,9 +4,11 @@
 > **审核轮次**：第 2 轮（第 1 轮已产出 13 数字复核；本轮为风格归因 + 阈值裁定 + 改写稿）
 > **参与方**：AI 审查（本页作者）｜行业研究员（独立复核 + 增量发现）｜主人（裁决）
 > **日期**：2026-10-06
-> **本页状态**：✅ 2026-10-07 由研究员落地 —— §8 七处改写稿全部进 `docs/industry-analysis-methodology.md`
-> §2.2/§4.2；§11.2~11.5 已落实（实现 + 复现命令见 §12）；§11.1（测量层）**待主人裁决，未实现**；
-> §11.6（`mainline` 标 `observational` + note 硬约束）**待主人拍板，未执行**。
+> **本页状态**：✅ **2026-10-07 第四轮执行已完成**（§12 三项裁决全部落地，见 **§13**）：
+> 先验名单已由外部源程序推导并锁定（74 条链）｜风格因子面板一等产物已建（K=5）｜
+> 收益层残差化 + (链,日) 双输出 + 差额可观测已通｜探针 + `STYLE_PANEL_DEGRADED` 退出码已接入｜
+> `mainline` 已标 `observational` + note 硬约束｜统计原语已收敛为一份（详见 §13.1）。
+> ⚠️ **两处自我更正**见 §13.2（etf_holdings 在机械过滤后**可用**；`value` 因子**并不现成**）。
 > **轮次**：第 3 轮（2026-10-06）—— 研究员全部接受三个否定，本节 §11 为裁决建议与执行细节
 > **环境状态（2026-10-06 核查）**：`docs/industry-analysis-methodology.md` **已纳入版本控制**（820 行，
 > 与 §8 行号引用一致）；弃用清理**已全部落地**（`cold_zone`/`tracker_pool` → `retired`）。
@@ -867,3 +869,62 @@ SE_step = np.sqrt(1/w[i] + 1/w[j]) # 每级增量的噪声锚点（实测 0.06�
 2. **PC 投影只作辅助诊断、不作判据**；
 3. 旧三分类计数（66/77/84+21 与 68/77/18/85）**一律作废**，须从锁定 spec 重算；
 4. 两套实现按 spec 对拍须**【逐对一致】**，不是"约等于"。
+
+---
+
+## 13. 第四轮执行记录（2026-10-07 · 研究员）
+
+> §12 的三项裁决已全部落地。本节记录"落了什么、怎么复现、以及**两处自我更正**"。
+> 权威条款仍在 §12；本节只记录执行结果与对 §12 之前结论的修正。
+
+### 13.1 落地清单
+
+| §12 步骤 | 落地 | 复现 |
+|---|---|---|
+| 前置 0 外部先验 | `tools/build_chain_prior_from_etf.py` → `docs/plan/chain-prior-list.csv`（**74 条链 / 335 成员**）→ `tools/lock_chain_prior.py --lock`（含**数据源 sha256** 与 `post_hoc` 标记） | `python3 tools/build_chain_prior_from_etf.py --probe`；`python3 tools/lock_chain_prior.py --list docs/plan/chain-prior-list.csv` |
+| 前置 1 风格因子面板 | `src/resonance/panel.py` + `scripts/build_style_panel.py` → `industry_style_panel.parquet`（特征）/ `industry_style_factors.parquet`（因子收益），均登记 `ARTIFACTS`，**meta 带 spec 全套** | `python3 scripts/build_style_panel.py` |
+| 步骤 1 `mainline` | `src/signals/sources.py` 五字段同改（`status/status_since/status_doc/status_short/status_note`） | `python3 -c "from src.signals.sources import SOURCE_SPECS as S; print(S['mainline']['status'])"` |
+| 步骤 2 Q 检验 | 上一轮已落地（`src/evaluation/inference.py::cochran_q_homogeneity` 等），本轮复核计数不变 | `python3 research/chain_three_class_qtest.py` |
+| 步骤 3 分层零分布 + 双输出 | `src/resonance/group.py`（**已按 §12.4 移出 `research/`**）+ `measure_chains()` 输出 `resonance_raw / resonance_adj / style_share / z_adj` | `python3 -m src.resonance.group`；`python3 scripts/measure_chain_resonance.py` |
+| 步骤 4 收益层残差化 + 三件套 | `src/resonance/measure.py::residualize`（原始=只剥市场、调整=剥市场+风格，**同一估计器同一窗口**）；残差面板 `industry_residual_panel.parquet` | 同上 |
+| 步骤 5 探针 + 退出码 | `src/resonance/probe.py`（输入端主探测 + 相对正交性 + 金丝雀 + 长窗口佐证）；`scripts/check_data_completeness.py::check_style_probe` 报 `STYLE_PANEL_DEGRADED` / `STYLE_PROBE_MISSING`（**WARNING，与 `PROV_MISSING` 同级 ⇒ 参与退出码**） | `python3 tests/test_resonance.py`（含**定向破坏自证**）；`python3 scripts/check_data_completeness.py --no-write` |
+| 步骤 6 §2.2 承重条款 | 方法论 §2.2 新增「**测量层（单位/双输出/复现三件套/探针）**」小节：单位=群、群规模稀释⇒双输出、三分存储、**确认器非发现器升为承重** | 读文档 |
+| 步骤 7 原语收敛 | `nonoverlap_t` 等 6 个原语**唯一实现**在 `src/evaluation/inference.py`；删除 `breadth_eval.nonoverlap_t` 的**同名不同义**别名；新增结构守卫测试 | `python3 tests/test_eval_inference.py`（`TestSingleImplementation`） |
+
+**实测产出（2026-09-30，74 条外部先验链）**：探针 ✅ 健康（纳入因子 5/5；正交性比值
+size 0.29 / value 0.31 / mom20 0.52 / vol20 0.34 / crowd 0.58；金丝雀 raw 0.699 → adj 0.276 = **0.395**）。
+风格解释份额（原始−调整）均值 **+0.111**、中位 **+0.074**、最大 **+0.486**
+⇒ **"共振里有多少是风格"这件事现在每天可见**，不再静默。
+
+### 13.2 ⚠️ 两处自我更正（推翻我上一轮的结论）
+
+**更正一：`etf_holdings` 在机械过滤后****可以****作先验源**（推翻 §12.4「冲突二」的结论）。
+上一轮只测了全集，据"原始篮子污染"判它一律不可用 —— **该判断对全集成立、对子集过严**：
+全集 249 只里 46% 共享错配指纹、19 只持仓 >300；**机械过滤后剩 134 只**，名称含主题词的
+34 只里 **32 只语义一致（94%）**，且那 2 只经复核是**我的正则漏字**（环保 ETF 持光伏/电力
+属中证环保口径；钢铁 ETF 第一大行业"普钢"是钢铁子类），不是数据错。
+⇒ spec ⑦ 已改判为"**可用，但过滤 spec 必须与名单一起锁定**"，并保留 `post_hoc` 标记
+（过滤规则系事后编写 ⇒ 只作对象清单与佐证，不作命中率检验）。
+复现：`python3 tools/build_chain_prior_from_etf.py --probe`。
+
+**更正二：`value` 因子并不"现成"**（§11.7 原文写 size/value/momentum/vol/拥挤度"均现成"）。
+数据根里**没有行业层估值表** —— 本轮用 `daily_basic/pb` 按静态成分聚合行业中位数新算
+（全历史 1,636 天可覆盖）。另：`crowd` 源表**只覆盖 94/131 个行业**且起于 2020-02-20
+⇒ 覆盖判据改为**按因子基线**（统一缺失率阈值会让它天天假报警）。
+⇒ 这两条已写进 `src/resonance/panel.py` 文档串与 spec ⑧ 的"已知缺口"。
+
+### 13.3 一处在实现中发现的方法学问题（供后续参考）
+
+`corr(残差, 因子) ≈ 0` 这个代数不变量**只对 in-sample 残差成立**。本项目为了每天出数，
+用的是 **trailing out-of-sample** 残差化（β 用 [t−250, t−1] 估计、作用在 t）⇒
+健康样本上 |corr| 就有 **0.048~0.113**，绝对阈值判据必然误报。
+⇒ 改用**相对判据** `|corr|adj / |corr|raw ≤ 0.75`（健康实测 0.29~0.58；调整失效则 = 1.0），
+并且只对**原始暴露 ≥0.05** 的因子生效（噪声因子的比值无意义）。已写进 spec ⑧ 与测试。
+
+### 13.4 待办（按依赖顺序）
+
+1. **主人撰写真正的"事前名单"** —— 现名单（ETF 篮子）只能作对象清单与佐证，命中率检验需要真正的事前名单；
+2. 把 `scripts/build_style_panel.py` + `scripts/measure_chain_resonance.py` **接入源端日更链**
+   （本机是从端只读副本，产物已被重定向到 `_local_dev/`；源端跑才算真上线）；
+3. `value` 的行业层估值表**一等产物化**（现由本模块临时聚合，未登记）；
+4. 先验名单的**发布日期**与源端核对（parquet 无日期列）。

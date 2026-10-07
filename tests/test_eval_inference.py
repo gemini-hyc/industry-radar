@@ -219,5 +219,85 @@ class TestCochranQThreeSegment(unittest.TestCase):
             cochran_q_homogeneity([0.5, 0.4], [10, 2])                # 段样本 ≤ 3
 
 
+class TestSingleImplementation(unittest.TestCase):
+    """④ 结构守卫：通用统计原语在 `src/` 里**只允许有一份实现**（2026-10-07）。
+
+    背景：review §12.7 步骤 7 要求收敛原语。实测 2026-10-06 已收敛完
+    （`evaluate.py` 与 `breadth_eval.py` 都改为 re-export），只剩下
+    `breadth_eval.nonoverlap_t = nonoverlap_t_on_index` 这个**同名不同义**别名
+    —— 与 `evaluate.nonoverlap_t`（按日期去重的事件流口径）撞名、语义相反、
+    导入错模块也不报错。本条锁住「不得再出现第二份实现 / 别名」。
+
+    复现命令：
+        grep -rn "^def \\(cluster_t\\|nonoverlap_t\\|cluster_se\\)" src/ | grep -v __pycache__
+    """
+
+    PRIMITIVES = ("cluster_t", "nonoverlap_t", "cluster_se",
+                  "cs_rank_ic", "ts_quantile", "tail_concentration")
+    ONLY_HERE = "src/evaluation/inference.py"
+
+    def _definitions(self):
+        """返回 [(相对路径, 函数名, 是否纯代理)]。
+
+        「纯代理」= 函数体去掉注释/docstring 后**只有一个 return**，且调用的是
+        `_` 前缀的被导入实现（如 `return _cluster_t(values, dates)`）。
+        这类包装层是为了兼容既有调用与测试，不构成第二份实现。
+        """
+        import ast
+        import re
+        from pathlib import Path
+
+        pat = re.compile(r"^def\s+(" + "|".join(self.PRIMITIVES) + r")\b",
+                         re.MULTILINE)
+        root = Path(__file__).resolve().parents[1]
+        hits = []
+        for p in (root / "src").rglob("*.py"):
+            if "__pycache__" in str(p):
+                continue
+            text = p.read_text(encoding="utf-8")
+            if not pat.search(text):
+                continue
+            tree = ast.parse(text)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name in self.PRIMITIVES:
+                    body = [n for n in node.body if not isinstance(n, ast.Expr)]
+                    proxy = False
+                    if len(body) == 1 and isinstance(body[0], ast.Return):
+                        v = body[0].value
+                        proxy = (isinstance(v, ast.Call)
+                                 and isinstance(v.func, ast.Name)
+                                 and v.func.id.startswith("_"))
+                    rel = str(p.relative_to(root)).replace("\\", "/")
+                    hits.append((rel, node.name, proxy))
+        return hits
+
+    def test_primitives_have_single_implementation(self):
+        bad = [(f, n) for f, n, proxy in self._definitions()
+               if f != self.ONLY_HERE and not proxy]
+        self.assertEqual([], bad,
+                         f"统计原语出现第二份实现，必须改为 import {self.ONLY_HERE}：{bad}")
+
+    def test_proxy_wrappers_delegate_to_inference(self):
+        """代理层（`evaluate.py` 的兼容包装）必须调用 `_` 前缀的实现，不得自带算式。"""
+        proxies = [(f, n) for f, n, proxy in self._definitions() if proxy]
+        self.assertTrue(proxies, "没有检测到代理包装层，本守卫可能已失效（检查 PRIMITIVES 名单）")
+        for f, n in proxies:
+            self.assertNotEqual(f, self.ONLY_HERE,
+                                f"{f}::{n} 是代理层，说明别处才定义了真正的实现 —— 反了")
+
+    def test_inference_defines_all_primitives(self):
+        found = {n for f, n, _p in self._definitions() if f == self.ONLY_HERE}
+        missing = set(self.PRIMITIVES) - found
+        self.assertEqual(set(), missing, f"{self.ONLY_HERE} 缺少原语：{missing}")
+
+    def test_no_ambiguous_alias_nonoverlap_t(self):
+        """`nonoverlap_t` 只许是「按日期去重」的那一个；不得再给它起位置切片别名。"""
+        import importlib
+        bev = importlib.import_module("src.research.breadth_eval")
+        self.assertFalse(hasattr(bev, "nonoverlap_t"),
+                         "breadth_eval 又导出了 nonoverlap_t：与 evaluate 的事件流口径同名不同义，"
+                         "请改用 nonoverlap_t_on_index / nonoverlap_t_sorted")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
