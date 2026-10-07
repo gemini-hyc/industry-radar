@@ -4,18 +4,23 @@
 
 ```bash
 # 一条命令跑全部（结构断言 + 数值快照对比）
-/Users/hyc/Quant/stock-doctor/.venv/bin/python tests/run_tests.py
+make check                 # = 语法检查 + 回归基线，解释器自动探测
 
 # 只跑结构断言（快，2 秒）
-/Users/hyc/Quant/stock-doctor/.venv/bin/python tests/run_tests.py --quiet
+/usr/bin/python3 tests/run_tests.py --quiet
 
 # 对沙箱产物跑（验证改动后的产物结构）
 INDUSTRY_RADAR_DATA=/tmp/ir-verify/data \
-  /Users/hyc/Quant/stock-doctor/.venv/bin/python tests/run_tests.py
+  /usr/bin/python3 tests/run_tests.py
 ```
 
-> ⚠️ **解释器必须是有 pandas 的那个**。本机 `/usr/bin/python3` **没有 pandas**，
-> 直接跑会 `ModuleNotFoundError`。`requirements.txt` 也还写着错误的路径（待修，见改进路线 A3）。
+> ⚠️ **解释器必须有 pandas + pyarrow**。默认取 `/usr/bin/python3`（源端实测
+> pandas 2.3.3 / pyarrow 21.0.0 齐备，且与生产日更链同一个）；该解释器不合格时
+> 回落 `PATH` 里的 `python3`，都不合格会直接报错。显式覆盖：
+> `make check PY=/path/to/python`。
+>
+> 📌 2026-10-07 订正：本页原写「本机 /usr/bin/python3 没有 pandas」并让所有示例
+> 指向 `stock-doctor/.venv` —— 那是**从机**的情况，该 venv 在源端不存在。
 
 ---
 
@@ -63,7 +68,7 @@ INDUSTRY_RADAR_DATA=/tmp/ir-verify/data \
 更新基线（**会把当前状态固化为新锚点，请连同 change doc 一起提交**）：
 
 ```bash
-/Users/hyc/Quant/stock-doctor/.venv/bin/python tests/snapshot.py --update
+make snapshot          # 等价于 python tests/snapshot.py --update
 ```
 
 ---
@@ -100,7 +105,7 @@ INDUSTRY_RADAR_DATA=/tmp/ir-verify/data \
 ## `selftest.py` —— 测试的测试
 
 ```bash
-/Users/hyc/Quant/stock-doctor/.venv/bin/python tests/selftest.py
+make selftest          # 等价于 python tests/selftest.py
 ```
 
 一个回归套件最大的失败模式不是「有 bug 没抓到」，而是**它其实永远绿**：断言拿错对象、

@@ -3,10 +3,16 @@
 # 目的：把 A1（tools/dev_verify.sh 同源 A/B）与 A2（tests/ 回归基线）收成提交前的一条命令。
 # 全部复用项目自有脚本，**零新增依赖**。
 #
-# ⚠️ 解释器：本机只有 stock-doctor/.venv 有 pandas（A3 纠偏，见 requirements.txt）。
-#    换机器用 `make check PY=/path/to/python` 覆盖，不要写死在本文件里。
+# ⚠️ 解释器：生产日更链跑的就是 /usr/bin/python3（见 scripts/run_daily_scheduled.sh），
+#    所以本文件的默认值与它一致 —— 开发与生产同解释器，才能把「本机绿」当作
+#    「生产也绿」的证据。从机曾借用 stock-doctor/.venv，2026-10-07 汇入源端时
+#    该路径在本机不存在，裸跑 make check 会直接失败（见 requirements.txt A3 纠偏）。
+#    换机器用 `make check PY=/path/to/python` 覆盖，或在候选列表里加一条。
 
-PY ?= /Users/hyc/Quant/stock-doctor/.venv/bin/python
+PY ?= $(shell for c in "$$PY" /usr/bin/python3 python3; do \
+             command -v "$$c" >/dev/null 2>&1 || continue; \
+             "$$c" -c 'import pandas, pyarrow' >/dev/null 2>&1 && { echo "$$c"; break; }; \
+         done)
 
 .PHONY: help check syntax test selftest snapshot verify clean-verify
 

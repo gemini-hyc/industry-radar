@@ -60,18 +60,19 @@ scripts/build_members_daily.py  ← 日更：按交易日历展开每日快照
 
 | 机器 | 用哪个解释器 | 说明 |
 |---|---|---|
-| 源端 Mac Studio | `/usr/bin/python3`（系统 python 3.9.6） | 日更链实际使用的解释器，依赖装在系统解释器里 |
-| 本机 MacBook（从机） | `/Users/hyc/Quant/stock-doctor/.venv/bin/python` | **借用** stock-doctor 的 venv；本机 `/usr/bin/python3` **没有 pandas** |
+| 源端 Mac Studio | `/usr/bin/python3`（系统 python 3.9.6） | 日更链实际使用的解释器，依赖装在系统解释器里；**开发与回归也用它** |
 | 新机器 | 自建 venv | `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` |
 
-- **本文档下面的命令一律写 `python3`**（= 源端用法）。**在本机执行前必须把 `python3` 换成本机解释器路径**，
-  否则要么 `ModuleNotFoundError: pandas`，要么更糟 —— 被解析到**另一个恰好装了 pandas 的解释器**，
-  版本不同、**数值结果可能不同**。
-- 本机实测版本（Python 3.9.6）：pandas 2.3.3 / numpy 2.0.2 / pyarrow 21.0.0 / PyYAML 6.0.3（详见 `requirements.txt` 头注释）。
-- ⚠️ 本机 venv **缺 scipy、缺 futu-api**：分别只在 `scripts/update_industry_factor.py`（拥挤度）
-  与富途拉取环节用到。**缺依赖时不要临时安装**（改环境需先获许可），按替代方案处理。
+- **本文档下面的命令一律写 `python3`**（= 源端用法）。从机若解释器不同，
+  执行前替换 `python3`，否则要么 `ModuleNotFoundError: pandas`，要么更糟 ——
+  被解析到**另一个恰好装了 pandas 的解释器**，版本不同、**数值结果可能不同**。
+- 源端实测版本（2026-10-07，Python 3.9.6）：pandas 2.3.3 / numpy 2.0.2 / pyarrow 21.0.0 /
+  scipy 1.13.1 / PyYAML 6.0.3，futu-api 亦可用（详见 `requirements.txt` 头注释）。
+- ⚠️ 缺依赖时**不要临时安装**（改环境需先获许可），按替代方案处理。
 - 两个入口脚本的解释器来源：`每日行业报告.command` 用 `${PYTHON:-python3}`（可用 `PYTHON=` 覆盖）；
-  `scripts/run_daily_scheduled.sh` **硬编码 `/usr/bin/python3`**（源端专用，**本机不要照跑**）。
+  `scripts/run_daily_scheduled.sh` **硬编码 `/usr/bin/python3`**（launchd 的 PATH 不含 homebrew，故写死）。
+- `make check` / `tools/dev_verify.sh` 的默认解释器同样指向 `/usr/bin/python3`；
+  不合格时回落 `PATH` 里的 `python3`，覆盖用 `make check PY=/path/to/python`。
 
 ## 开发与验证（`make`）
 

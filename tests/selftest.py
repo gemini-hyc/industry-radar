@@ -20,8 +20,8 @@
   兜底（进程被中断也能手工恢复），且 `try/finally` 保证恢复。
 
 用法：
-    /Users/hyc/Quant/stock-doctor/.venv/bin/python tests/selftest.py
-    IR_REGRESS_TMP=/tmp/xxx python tests/selftest.py     # 自定义沙箱路径
+    make selftest                                    # 解释器自动探测
+    IR_REGRESS_TMP=/tmp/xxx python tests/selftest.py  # 自定义沙箱路径
 
 ⚠️ 本文件**不参与**日常测试（会写 /tmp 且耗时约 30 秒），只在**改动测试套件本身**
    或怀疑套件失效时跑。

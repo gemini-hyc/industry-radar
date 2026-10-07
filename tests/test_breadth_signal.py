@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -595,9 +596,16 @@ class TestColdZoneConditionalVerdictReported(unittest.TestCase):
         """均值 > 0 但中位数 ≤ 0 ⇒ 结论只能写成"观察项"。
 
         这条断言的是**三者之间的关系**，不是某个具体数值 ⇒ 硬断言。
+
+        ⚠️ 事件表是**探针的临时产物**（`/tmp/ir-coldcond/...`），不是仓库内基线，
+        换机器/清 /tmp 后就不在了。必须先判存在性再读取 —— 顺序反了会让
+        「没跑探针」这件事从「跳过」变成「异常」，把 90/90 变成 89/90 ERROR，
+        而这不是代码回归、只是本机状态差异（2026-10-07 源端实测踩到）。
         """
-        rng = np.random.default_rng(21)
-        ev = pd.read_parquet("/tmp/ir-coldcond/out/events_final.parquet")
+        p = Path("/tmp/ir-coldcond/out/events_final.parquet")
+        if not p.exists():
+            self.skipTest("冷区事件表不存在（探针未跑）；本条只锁定三者的关系")
+        ev = pd.read_parquet(p)
         s = ev[ev.is_cold].fwd_exc_20.dropna()
         if len(s) < 100:
             self.skipTest("冷区事件表不存在（探针未跑）；本条只锁定三者的关系")

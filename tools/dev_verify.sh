@@ -19,7 +19,8 @@
 #   tools/dev_verify.sh --where            # 显示沙箱路径与占用
 #
 # 环境变量：
-#   IR_VERIFY_PY       Python 解释器（默认 stock-doctor venv —— 本机唯一有 pandas 的）
+#   IR_VERIFY_PY       Python 解释器（默认与生产日更链同：/usr/bin/python3；
+#                      留空则在该解释器缺 pandas 时回落到 PATH 里的 python3）
 #   IR_VERIFY_DATA_SRC 数据来源（默认 ~/quant-data）
 #   IR_VERIFY_ROOT     工作区根（默认 /tmp/ir-verify）
 #   IR_VERIFY_KEEP     非空则不删本次产物（默认保留，便于人工复核）
@@ -32,7 +33,15 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY="${IR_VERIFY_PY:-/Users/hyc/Quant/stock-doctor/.venv/bin/python}"
+# 解释器：与生产日更链同源（run_daily_scheduled.sh 写死 /usr/bin/python3）。
+# 该解释器若缺 pandas，回落到 PATH 里的 python3；都不合格则由下面的 -x 检查报错。
+if [ -n "${IR_VERIFY_PY:-}" ]; then
+  PY="$IR_VERIFY_PY"
+elif /usr/bin/python3 -c 'import pandas, pyarrow' >/dev/null 2>&1; then
+  PY="/usr/bin/python3"
+else
+  PY="$(command -v python3 || echo /usr/bin/python3)"
+fi
 DATA_SRC="${IR_VERIFY_DATA_SRC:-$HOME/quant-data}"
 ROOT="${IR_VERIFY_ROOT:-/tmp/ir-verify}"
 SB_DATA="$ROOT/data"
