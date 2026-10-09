@@ -1,93 +1,93 @@
 {
   "_meta": {
-    "generated_at": "2026-10-07 21:48:55",
+    "generated_at": "2026-10-09 23:29:27",
     "data_root": "/Users/hyc/quant-data",
     "note": "数值快照基线 —— 只用于「数据变化 vs 行为回归」的区分，不作失败判据",
-    "git_commit": "c86e084"
+    "git_commit": "c35f8df"
   },
   "artifacts": {
     "industry_daily_full": {
       "exists": true,
-      "rows": 214316,
+      "rows": 214578,
       "cols": 10,
       "date_col": "date",
       "date_min": "2020-01-02",
-      "date_max": "2026-09-30",
-      "n_days": 1636,
+      "date_max": "2026-10-09",
+      "n_days": 1638,
       "n_industries": 131,
       "stats": {
         "avg_pct": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 0.07659,
+          "mean": 0.076238,
           "min": -15.978494,
           "max": 156.189714
         },
         "total_amount": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 15760663603.797632,
+          "mean": 15869654812.102007,
           "min": 10547198.67,
           "max": 2531823378789.009
         },
         "stock_n": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 35.462537,
+          "mean": 35.467578,
           "min": 1.0,
           "max": 244.0
         },
         "breadth": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 0.474857,
+          "mean": 0.474853,
           "min": 0.0,
           "max": 1.0
         },
         "breadth_ma13": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 0.474324,
+          "mean": 0.474381,
           "min": 0.0,
           "max": 1.0
         },
         "n_stocks": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 39.854962,
+          "mean": 39.987841,
           "min": 2.0,
-          "max": 244.0
+          "max": 280.0
         }
       }
     },
     "industry_weighted_returns": {
       "exists": true,
-      "rows": 214316,
+      "rows": 214578,
       "cols": 5,
       "date_col": "date",
       "date_min": "2020-01-02",
-      "date_max": "2026-09-30",
-      "n_days": 1636,
+      "date_max": "2026-10-09",
+      "n_days": 1638,
       "n_industries": 131,
       "stats": {
         "weighted_pct": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 0.083632,
+          "mean": 0.082838,
           "min": -17.744428,
           "max": 92.009667
         },
         "circ_mv": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 54942892.445469,
+          "mean": 54963642.906802,
           "min": 82447.0456,
-          "max": 1100850250.6216
+          "max": 1098835633.2019
         },
         "stock_n": {
-          "n": 214316,
+          "n": 214578,
           "nan": 0,
-          "mean": 35.479479,
+          "mean": 35.483689,
           "min": 1.0,
           "max": 244.0
         }
@@ -95,12 +95,12 @@
     },
     "industry_members_daily": {
       "exists": true,
-      "rows": 2823022,
+      "rows": 8429323,
       "cols": 3,
       "date_col": "date",
-      "date_min": "2024-09-24",
-      "date_max": "2026-09-30",
-      "n_days": 490,
+      "date_min": "2020-01-02",
+      "date_max": "2026-10-09",
+      "n_days": 1638,
       "n_industries": 131
     },
     "industry_members": {
@@ -111,122 +111,125 @@
     },
     "daily_regime": {
       "exists": true,
-      "rows": 1636,
-      "cols": 24,
+      "rows": 1638,
+      "cols": 25,
       "date_col": "date",
       "date_min": "2020-01-02",
-      "date_max": "2026-09-30",
-      "n_days": 1636,
+      "date_max": "2026-10-09",
+      "n_days": 1638,
       "by_label": {
         "全面上涨": 458,
         "全面下跌": 421,
-        "轮动": 388,
-        "偏弱轮动": 198,
-        "混合": 171
+        "轮动": 219,
+        "混合": 199,
+        "偏弱轮动": 100,
+        "边缘结构性": 98,
+        "偏强结构性": 94,
+        "结构性": 49
       },
       "stats": {
         "up_pct": {
-          "n": 1636,
+          "n": 1638,
           "nan": 0,
-          "mean": 50.831482,
+          "mean": 50.821147,
           "min": 0.0,
           "max": 100.0
         },
         "mean_ret": {
-          "n": 1636,
+          "n": 1638,
           "nan": 0,
-          "mean": 0.083632,
+          "mean": 0.082838,
           "min": -8.919442,
           "max": 9.726328
         },
         "std_ret": {
-          "n": 1636,
+          "n": 1638,
           "nan": 0,
-          "mean": 1.461555,
+          "mean": 1.460722,
           "min": 0.676727,
           "max": 8.159832
         },
         "top5_conc": {
-          "n": 1636,
+          "n": 1638,
           "nan": 0,
-          "mean": 0.304193,
+          "mean": 0.304016,
           "min": -8.329588,
           "max": 1.0
         },
         "rank_consistency": {
-          "n": 1636,
+          "n": 1638,
           "nan": 0,
-          "mean": -0.245629,
-          "min": -0.467288,
-          "max": 0.222703
+          "mean": 0.003801,
+          "min": -0.173831,
+          "max": 0.378163
         }
       }
     },
     "industry_nav_924": {
       "exists": true,
-      "rows": 64190,
+      "rows": 64452,
       "cols": 9,
       "date_col": "date",
       "date_min": "2024-09-24",
-      "date_max": "2026-09-30",
-      "n_days": 490,
+      "date_max": "2026-10-09",
+      "n_days": 492,
       "n_industries": 131,
       "stats": {
         "nav_w": {
-          "n": 64190,
+          "n": 64452,
           "nan": 0,
-          "mean": 173.726481,
+          "mean": 172.9781,
           "min": 78.336805,
-          "max": 997.648068
+          "max": 981.731212
         },
         "nav_e": {
-          "n": 64190,
+          "n": 64452,
           "nan": 0,
-          "mean": 170.090519,
+          "mean": 170.085584,
           "min": 74.10927,
           "max": 767.752029
         },
         "nav_hs300": {
-          "n": 64190,
+          "n": 64452,
           "nan": 0,
-          "mean": 134.672732,
+          "mean": 134.671095,
           "min": 104.331,
           "max": 157.486876
         },
         "rs_w": {
-          "n": 64190,
+          "n": 64452,
           "nan": 0,
-          "mean": 128.008234,
+          "mean": 127.506408,
           "min": 51.697847,
-          "max": 658.391133
+          "max": 647.886911
         }
       }
     },
     "mainline_detection": {
       "exists": true,
       "rows": 23,
-      "cols": 12,
+      "cols": 19,
       "n_mainline": 1
     },
     "signals_log": {
       "exists": true,
-      "rows": 2257,
+      "rows": 2260,
       "cols": 17,
       "date_col": "signal_date",
       "date_min": "2020-02-07",
-      "date_max": "2026-09-24",
-      "n_days": 507,
+      "date_max": "2026-10-09",
+      "n_days": 510,
       "n_industries": 127
     }
   },
   "ledger": {
-    "rows": 2257,
+    "rows": 2260,
     "by_source": {
       "cold_zone": 2234,
       "tracker_pool": 21,
-      "mainline": 2
+      "mainline": 5
     },
     "date_min": "2020-02-07",
-    "date_max": "2026-09-24"
+    "date_max": "2026-10-09"
   }
 }
