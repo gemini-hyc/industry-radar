@@ -61,7 +61,10 @@ EXPECTED_COLUMNS: dict[str, list[str]] = {
     "industry_members": ["stock_code", "ind_code", "ind_name"],
     "daily_regime": [
         "date", "up_pct", "mean_ret", "std_ret", "skew_ret", "top5_conc",
-        "rank_consistency", "rank_var_mean", "regime", "month",
+        # rank_autocorr：2026-10-01 regime v2 引入（changes-2026-10-01-p2-regime.md），
+        #   但当时**漏登记进本契约**，潜伏至 2026-10-08 首次真实根刷新才转红
+        #   ⇒ 2026-10-09 补登（本次修绿动作之一）。
+        "rank_consistency", "rank_var_mean", "rank_autocorr", "regime", "month",
         "margin_bal", "margin_bal_chg_pct", "margin_rz_buy_share", "margin_leverage",
         "lhb_stock_n", "lhb_net", "lhb_inst_net", "lhb_hsgt_net",
         "block_amt", "block_disc", "north_top10_amt", "north_top10_net",
@@ -98,12 +101,13 @@ EXPECTED_COLUMNS: dict[str, list[str]] = {
 #
 # 🔴 源端重跑后应**回到严格模式**：把下面对应条目清空，
 #    让 test_columns_exact_set 恢复硬断言（验收标准：产物 mtime > 2026-10-04）。
+#
+# ✅ 2026-10-09 已回到严格模式：十步链于 10-08 19:30 首次写入真实数据根，
+#    mainline_detection.csv 已含 B1/D2 三列（实测 15 列，mtime 2026-10-09 19:30）
+#    ⇒ 白名单清空，test_columns_exact_set 恢复硬断言。
+#    （本次清理的直接原因：白名单未清导致套件静默红了约 3 天 —— 十步链不跑测试套件。）
 TOLERATED_MISSING: dict[str, dict[str, str]] = {
-    "mainline_detection": {
-        "is_mainline_raw": "B1/D2 2026-10-04 上线；本机产物停在 2026-09-30，源端重跑后应清空此项",
-        "consec_days": "同上",
-        "min_consecutive_days": "同上",
-    },
+    # 空字典 = 严格模式。新增豁免必须写明「产物滞后」这一唯一合法理由与撤销条件。
 }
 
 # 被测产物 → 文件路径。以 ARTIFACTS 登记表为真相来源（铁律：新增产物必须登记）。
