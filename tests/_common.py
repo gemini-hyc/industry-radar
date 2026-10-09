@@ -79,6 +79,9 @@ EXPECTED_COLUMNS: dict[str, list[str]] = {
         "winrate", "amt_ma20", "hist_mean_amt", "is_mainline", "stage", "style", "od_ratio",
         # B1/D2（2026-10-04 跨期稳定性约束）新增 —— 改 mainline 口径时连同这三列一起维护
         "is_mainline_raw", "consec_days", "min_consecutive_days",
+        # P0（2026-10-09 主线「记忆」只读字段）：解释用，**禁止**参与判定。
+        #   同时修正 consec_days 的截断缺陷（原值被锁死在 ≤3）。
+        "hot_age", "heat_slope20", "cum_excess_seg", "is_new_mainline",
     ],
     "signals_log": [
         "signal_date", "source", "obs_type", "ind_code", "ind_name", "score",

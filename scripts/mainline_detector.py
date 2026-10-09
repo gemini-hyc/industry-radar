@@ -180,11 +180,23 @@ def _raw_is_mainline(row, heat_threshold, excess_threshold, winrate_threshold):
     )
 
 
+def trailing_true_count(s: pd.Series) -> pd.Series:
+    """以每个位置结尾的连续 True 个数（**不截断**）。
+
+    用途：`consec_days` 曾因只在 min_consecutive_days 窗口内回扫而被锁死在 ≤3，
+    导致「热了 45 天」与「刚满 3 天」在报表里长得一样；本函数给出真实段长。
+    """
+    s = s.fillna(False).astype(bool)
+    return s.groupby((~s).cumsum()).cumsum().astype(int)
+
+
 def detect_mainline(group_signals, date,
                     heat_threshold=1.3, excess_threshold=0.3, winrate_threshold=0.6,
-                    min_consecutive_days=3):
-    """
-    检测指定日期是否存在主线。
+                    min_consecutive_days=3, lookback=20):
+    """检测指定日期是否存在主线。
+
+    ⚠️ lookback 应与 compute_group_signals 的 lookback 保持一致（默认同为 20）；
+       它只影响 heat_slope20 的回看步长，不影响任何判定结果。
 
     ⚠️ 跨期稳定性约束（B1 / D2，2026-10-04 上线）：主线须**连续 >= min_consecutive_days 个交易日**
        满足三条件才成立。改动前无任何跨日约束，实测 **30.3% 的主线段只活 1 天**（单日孤噪）。
@@ -218,28 +230,46 @@ def detect_mainline(group_signals, date,
             row, heat_threshold, excess_threshold, winrate_threshold)
 
         # 跨期稳定性：以当日结尾的连续主线天数
-        consec_ok, consec_days = False, 0
-        if min_consecutive_days <= 1:
-            consec_ok = is_mainline_raw
-            consec_days = 1 if is_mainline_raw else 0
-        else:
-            lo = loc - (min_consecutive_days - 1)
-            if lo >= 0:
-                flags = [_raw_is_mainline(r, heat_threshold, excess_threshold, winrate_threshold)
-                         for _, r in d.iloc[lo: loc + 1].iterrows()]
-                consec_ok = all(flags)
-                for f in reversed(flags):          # 末尾连续天数
-                    if not f:
-                        break
-                    consec_days += 1
-            else:
-                # 历史不足 N 个交易日 ⇒ 无法确认连续，一律不算主线（但记录已有天数）
-                for _, r in d.iloc[0: loc + 1].iterrows():
-                    if not _raw_is_mainline(r, heat_threshold, excess_threshold, winrate_threshold):
-                        break
-                    consec_days += 1
+        #
+        # 🔧 2026-10-09（P0）：原实现只在 min_consecutive_days 的窗口内回扫，
+        #    ⇒ consec_days 被锁死在 ≤3，「热了 45 天」与「刚满 3 天」显示无差别。
+        #    改为对**整段序列**求尾部长 ⇒ 显示真实段长。
+        #    ⚠️ is_mainline 的判定结果**逐字不变**：run_len >= N ⟺ 末 N 日全部达标
+        #    （含 min_consecutive_days<=1 回滚模式、以及历史不足的早期分支）。
+        raw_series = (
+            d['heat_ratio'].fillna(0).ge(heat_threshold)
+            & d['excess_ma20'].fillna(0).ge(excess_threshold)
+            & d['excess_winrate'].fillna(0).ge(winrate_threshold)
+        )
+        run_len_series = trailing_true_count(raw_series)
+        consec_days = int(run_len_series.iloc[loc])
+        consec_ok = consec_days >= min_consecutive_days
 
         is_mainline = is_mainline_raw and consec_ok
+
+        # —— 记忆类只读字段（P0，2026-10-09）——
+        # 设计定位：**只用于解释，不参与任何判定**。
+        #   依据 2026-10-09 探针（research/mainline_memory_probe*.py）：
+        #   段龄作为连续变量 IC≈+0.07、段内累计超额 IC≈+0.05 ⇒ **无预测力**，
+        #   其价值在于把「同标签不同状态」分开（例：同标见顶期，
+        #   林业Ⅱ 段内累计 +24.63% vs 航海装备Ⅱ −2.31%），属可解释性改进。
+        #   且段龄口径定义敏感（热度段龄 vs 三条件段龄会翻转分桶结论），
+        #   故明确禁止用这些字段改 is_mainline / stage。
+        hot_series = d['heat_ratio'].fillna(0).ge(heat_threshold)
+        hot_age_series = trailing_true_count(hot_series)
+        hot_age = int(hot_age_series.iloc[loc])
+
+        heat_slope = float(d['heat_ratio'].iloc[loc]) - float(
+            d['heat_ratio'].iloc[loc - lookback] if loc >= lookback else d['heat_ratio'].iloc[0]
+        )
+
+        # 本段（热度段）内累计超额：自段起点起，剔除起点那一天
+        blk = (~hot_series).cumsum()
+        cum = d['excess'].fillna(0.0).groupby(blk).cumsum() - d['excess'].fillna(0.0).groupby(blk).transform('first')
+        cum_excess_seg = float(cum.iloc[loc]) if bool(hot_series.iloc[loc]) else 0.0
+
+        # 当日首次达到连续门槛 ⇒ 1-bit「新晋主线」事件
+        is_new_mainline = bool(is_mainline and consec_days == min_consecutive_days)
 
         # 判断发展阶段
         if heat >= 1.7:
@@ -301,8 +331,14 @@ def detect_mainline(group_signals, date,
             'is_mainline': is_mainline,
             # —— B1/D2 新增：可审计字段（下游只读 is_mainline，这几列供诊断）——
             'is_mainline_raw': is_mainline_raw,      # 仅三条件，未过连续性门槛
-            'consec_days': consec_days,             # 以当日结尾的连续主线天数
+            'consec_days': consec_days,             # 以当日结尾的连续主线天数（真实值，不截断）
             'min_consecutive_days': min_consecutive_days,  # 生效阈值（产物自解释）
+            # —— P0（2026-10-09）：记忆类只读字段 ——
+            # ⛔ 只作解释用，**禁止**用于改 is_mainline / stage（依据见上方注释）
+            'hot_age': hot_age,                     # 热度达标（heat>=阈值）连续天数：段龄
+            'heat_slope20': heat_slope,             # 热度 20 日变化（>0 升温 / <0 退潮）
+            'cum_excess_seg': cum_excess_seg,       # 本段内累计超额（%）：量价是否兑现
+            'is_new_mainline': is_new_mainline,     # 当日首次达到连续门槛（1-bit 事件）
             'stage': stage,
             'style': style,
             'od_ratio': od_ratio,
@@ -423,7 +459,15 @@ def run_full_detection(reference_date=None):
             print(f"    热度={r['heat_ratio']:.1f}x均值, 超额={r['excess_ma20']:.3f}%/日, 胜率={r['winrate']:.0%}")
             print(f"    阶段={r['stage']}, 类型={r['style']}(进攻/防御={r['od_ratio']:.1f})")
             print(f"    成交额占比={r['amt_ma20']:.1f}%(历史均值{r['hist_mean_amt']:.1f}%)")
-            print(f"    连续主线={int(r['consec_days'])} 天")
+            print(f"    连续达标={int(r['consec_days'])} 天"
+                  f"{'（🆕 今日新晋）' if bool(r['is_new_mainline']) else ''}"
+                  f" | 热度段龄={int(r['hot_age'])} 天"
+                  f" | 热度20日变化={r['heat_slope20']:+.2f}x"
+                  f" | 段内累计超额={r['cum_excess_seg']:+.2f}%")
+            # 记忆字段口径注解（防止被误读为买卖建议）
+            if r['cum_excess_seg'] < 0 and r['heat_slope20'] > 0:
+                print(f"    ⚠️ 放量不涨：热度在升（{r['heat_slope20']:+.2f}x）但本段累计超额为负"
+                      f"（{r['cum_excess_seg']:+.2f}%）⇒ 分歧加剧，非「加速」")
     else:
         print("\n❌ 当前无主线，市场处于轮动状态")
 

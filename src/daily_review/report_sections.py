@@ -47,6 +47,17 @@ def _fmt(v, spec: str = ".1f", suffix: str = "", scale: float = 1.0) -> str:
         return "—"
 
 
+def _int(v) -> str:
+    """安全整数格式化（P0 段龄等计数列）：NaN/异常值返回 '—'"""
+    try:
+        f = float(v)
+        if pd.isna(f):
+            return "—"
+        return str(int(f))
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _parse_group_names(raw) -> str:
     """把 \"['林业Ⅱ']\" 解析为 \"林业Ⅱ\"；解析失败时原样返回"""
     try:
@@ -80,36 +91,60 @@ def format_mainline_section(trade_date: str) -> str:
         lines += ["今日无方向群数据。", ""]
         return "\n".join(lines)
 
+    # ⚠️ 2026-10-09 订正：原表头写成「热度 > 1.3x 且 60 日超额 > 0」，与实现不符。
+    #    实现口径 = 热度≥1.3x AND 20日超额≥0.3%/日 AND 20日超额胜率≥60% AND 连续≥3交易日。
+    CALIBER = "热度≥1.3x 且 20日超额≥0.3%/日 且 超额胜率≥60% 且 连续≥3交易日"
     mainlines = df[df["is_mainline"] == True]  # noqa: E712 — 列可能含 NaN
     if mainlines.empty:
-        lines += ["> 今日无主线方向（判定：热度 > 1.3x 且 60 日超额 > 0）。", ""]
+        lines += [f"> 今日无主线方向（判定：{CALIBER}）。", ""]
     else:
-        lines.append(f"> 检测到 **{len(mainlines)}** 个主线方向（判定：热度 > 1.3x 且 60 日超额 > 0）")
+        lines.append(f"> 检测到 **{len(mainlines)}** 个主线方向（判定：{CALIBER}）")
         lines.append("")
-        lines.append("| 方向群 | 代表行业 | 热度 | 超额(20d) | 胜率 | 阶段 | 风格 |")
-        lines.append("|:------:|:---------|:----:|:---------:|:----:|:----:|:----:|")
+        lines.append("| 方向群 | 代表行业 | 热度 | 超额(20d) | 胜率 | 阶段 | 风格 | 连续达标/段龄 | 段内累计超额 |")
+        lines.append("|:------:|:---------|:----:|:---------:|:----:|:----:|:----:|:------------:|:------------:|")
         for _, r in mainlines.sort_values("heat_ratio", ascending=False).iterrows():
             lines.append(
                 f"| 群{r.get('group_id')} | {_parse_group_names(r.get('group_names'))} "
                 f"| {_fmt(r.get('heat_ratio'), '.2f', 'x')} "
                 f"| {_fmt(r.get('excess_ma20'), '+.2f', '%')} "
                 f"| {_fmt(r.get('winrate'), '.0f', '%', scale=100)} "
-                f"| {r.get('stage', '')} | {r.get('style', '')} |"
+                f"| {r.get('stage', '')} | {r.get('style', '')} "
+                f"| {_int(r.get('consec_days'))}天 / {_int(r.get('hot_age'))}天 "
+                f"| {_fmt(r.get('cum_excess_seg'), '+.2f', '%')} |"
             )
+        lines.append("")
+        # P0（2026-10-09）：记忆字段的口径注解 —— 只解释状态，不给买卖建议
+        for _, r in mainlines.sort_values("heat_ratio", ascending=False).iterrows():
+            slope, cum = r.get("heat_slope20"), r.get("cum_excess_seg")
+            if bool(r.get("is_new_mainline")):
+                lines.append(f"> 🆕 群{r.get('group_id')} 今日首次达到连续门槛（新晋主线）。")
+            if pd.notna(cum) and pd.notna(slope) and cum < 0 and slope > 0:
+                lines.append(
+                    f"> ⚠️ 群{r.get('group_id')} **放量不涨**：热度 20 日变化 {slope:+.2f}x，"
+                    f"但本段累计超额 {cum:+.2f}% ⇒ 分歧加剧，不是「加速」。"
+                )
         lines.append("")
 
     top = df.nlargest(min(5, len(df)), "heat_ratio")
     lines += ["**热度 Top 5：**", "",
-              "| 方向群 | 代表行业 | 热度 | 超额(20d) | 阶段 | 主线 |",
-              "|:------:|:---------|:----:|:---------:|:----:|:----:|"]
+              "| 方向群 | 代表行业 | 热度 | 超额(20d) | 阶段 | 段龄 | 段内累计超额 | 主线 |",
+              "|:------:|:---------|:----:|:---------:|:----:|:----:|:------------:|:----:|"]
     for _, r in top.iterrows():
         flag = "✅" if bool(r.get("is_mainline")) else "—"
         lines.append(
             f"| 群{r.get('group_id')} | {_parse_group_names(r.get('group_names'))} "
             f"| {_fmt(r.get('heat_ratio'), '.2f', 'x')} "
             f"| {_fmt(r.get('excess_ma20'), '+.2f', '%')} "
-            f"| {r.get('stage', '')} | {flag} |"
+            f"| {r.get('stage', '')} | {_int(r.get('hot_age'))}天 "
+            f"| {_fmt(r.get('cum_excess_seg'), '+.2f', '%')} | {flag} |"
         )
+    lines.append("")
+    lines.append(
+        "> 口径：`段龄`=热度≥1.3x 的连续天数；`段内累计超额`=本段起点至今相对全行业等权的"
+        "累计超额。两者**仅用于区分同标签下的不同状态**（例：同为「见顶期」，"
+        "已兑现 vs 放量不涨），**无预测力**（2026-10-09 探针：段龄 IC≈+0.07、"
+        "段内累计超额 IC≈+0.05），不构成买卖建议。"
+    )
     lines.append("")
     return "\n".join(lines)
 
