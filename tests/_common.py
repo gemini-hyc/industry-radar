@@ -89,7 +89,28 @@ EXPECTED_COLUMNS: dict[str, list[str]] = {
         "fwd_ret_5", "fwd_ret_10", "fwd_ret_20", "fwd_ret_60",
         "fwd_excess_5", "fwd_excess_10", "fwd_excess_20", "fwd_excess_60",
     ],
+    # ── B2/B3 链版主线（2026-10-12 已激活）──────────────────────
+    # 来源：scripts/chain_mainline_detector.py（生产十步链第 7b 步）
+    # 产物：industry/chain_mainline_detection.csv（22 列，chain_id 开头）
+    # 与旧版 mainline_detection.csv（19 列，group_id 开头）**并存**，互不覆盖。
+    # 历史：本条目 2026-10-11 先作「预备白名单」备好但未激活（B2 未接线，
+    #   新版产物只在 _local_dev/，测试覆盖不到）；2026-10-12 B2 接入生产链后激活。
+    "chain_mainline_detection": [
+        # B2：群定义换成语义链 —— chain_id 替代 group_id
+        "chain_id", "chain_names", "n_industries", "heat_ratio", "excess_ma20",
+        "winrate", "amt_ma20", "hist_mean_amt", "is_mainline", "stage", "style", "od_ratio",
+        # 与旧版同名的判定/可审计列
+        "is_mainline_raw", "consec_days", "min_consecutive_days",
+        "hot_age", "heat_slope20", "cum_excess_seg", "is_new_mainline",
+        # B3（2026-10-11）：链内残差共振连续量，作**新增解释列**，不进 is_mainline 判定
+        "resonance_adj_today", "resonance_z_today", "style_share_today",
+    ],
 }
+
+# ⛔ 未激活的被测产物 —— 列名已在 EXPECTED_COLUMNS 备好，但**暂不纳入回归**。
+#    激活方式：把名字从上方的 PENDING_UNDER_TEST 移除（即加进 UNDER_TEST）。
+#    （2026-10-12：chain_mainline_detection 已激活并移出本集合。）
+PENDING_UNDER_TEST: set[str] = set()
 
 # ──────────────────────────────────────────────────────────────────────
 # 允许缺失的列（白名单）—— 只豁免「**本机产物滞后于代码**」这一个原因
@@ -158,6 +179,8 @@ REGIME_VALID_LABELS: frozenset[str] = frozenset({
 # 台账合法 source（新增信号来源须同步此表 + `src/signals/sources.py` 的 SOURCE_SPECS）
 LEDGER_VALID_SOURCES: frozenset[str] = frozenset({
     "cold_zone", "tracker_pool", "mainline", "hot_zone", "mid_zone",
+    # 🆕 2026-10-12：链版主线（已同步 sources.py::SOURCE_SPECS["chain_mainline"]）
+    "chain_mainline",
 })
 
 

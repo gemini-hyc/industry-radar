@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 INDUSTRY_LIST_PATH = INDUSTRY_DIR / "industry_list.parquet"
 MAINLINE_PATH = INDUSTRY_DIR / "mainline_detection.csv"
+# 链版主线（2026-10-12 B2 接线，方案 C：verified + n≥3 + z_s3>0 ⇒ 37 条）
+CHAIN_MAINLINE_PATH = INDUSTRY_DIR / "chain_mainline_detection.csv"
 
 # 信号定位（status）：决定一个来源在评估报告里的"身份"
 #   active        已被证据支持，可作为交易/决策依据
@@ -120,6 +122,33 @@ SOURCE_SPECS: Dict[str, Dict] = {
             "保留入账仅为留痕与日报连续性；不得通过调参「修复」。"
         ),
     },
+    # 🆕 2026-10-12：链版主线（产业链探测）。**新 source，不复用 "mainline"** ——
+    #    复用会让新行继承上面那条 status_note（"测错对象/不得用于链假设"），
+    #    而 evaluate.py 会照它渲染 ⇒ 等于给新方法贴上"已证伪"标签。
+    "chain_mainline": {
+        "label": "主线产业链成员行业（每日状态）",
+        "score_hint": "heat_ratio 热度，越大越强",
+        "direction": "desc",
+        # 🔴 定位 = observational，理由与 mainline **完全不同**，勿混淆：
+        #   · mainline      = 对象测错了（beta 影子），结论已下：方法错
+        #   · chain_mainline = 对象认定正确（74 链中 46 条跨段共振检验通过，取 n≥3 且 z_s3>0 ⇒ 37 条），
+        #                     但**前瞻有效性未验证** ⇒ 只积累样本，不作交易依据
+        #   ⛔ 不是 active：链版**没做过前瞻事件研究**。1638 天回溯证明的是"方法能正常出主线"
+        #      （2026 H1 主线率 66%），不是"主线信号有 alpha"。
+        #   ⛔ 不是 pending：pending 语义是"样本够了就有结论"，而链的对象问题**已有结论**。
+        "status": "observational",
+        "status_since": "2026-10-12",
+        "status_doc": "docs/plan/chain-mainline-report-switch-plan-2026-10-12.md",
+        "status_short": "对象认定正确（已验证产业链），但**前瞻有效性未验证**；⛔ 不作交易依据",
+        "status_note": (
+            "链 = 语义先验定家族（74 条）+ 链内残差共振跨段检验（46 verified / 7 observing / 21 failed），"
+            "本来源取 verified 且成员数≥3 且 z_s3>0 的 **37 条**，判定口径与旧版一致"
+            "（热度≥1.3x 且 20 日超额≥0.3%/日 且胜率≥60% 且连续≥3 交易日）。"
+            "⛔ 前瞻有效性**未验证**：1638 个交易日回溯只证明方法能正常出主线，不构成 alpha 证据；"
+            "链名单本身仍是 post_hoc，不得据此计算“共振方法发现了多少真链”的命中率。"
+            "保留入账用于积累前瞻样本；不得通过调参「修复」。"
+        ),
+    },
 }
 
 
@@ -159,28 +188,37 @@ def _parse_group_list(raw) -> List[str]:
 # 🔴 `_snapshot_tracker` 已于 2026-10-06 删除（tracker_pool 弃用）。
 #    依赖的 TRACKER_REPORT_PATH 常量与 industry_tracker.py 一并清理（计划 §3.1/§3.2）。
 
-def _snapshot_mainline(obs_date: str) -> List[Dict]:
-    if not MAINLINE_PATH.exists():
-        return []
-    df = pd.read_csv(MAINLINE_PATH)
-    if "is_mainline" not in df.columns:
-        return []
-    df = df[df["is_mainline"] == True]  # noqa: E712
+def _snapshot_from_frame(
+    df: pd.DataFrame,
+    obs_date: str,
+    source: str,
+    id_col: str,
+    names_col: str,
+    label: str,
+) -> List[Dict]:
+    """把「一行 = 一个群/链」的判定表展开成「一行 = 一个成员行业」的台账行。
 
+    旧版（方向群）与链版（产业链）**共用此函数**，仅 id/成员列名不同
+    （两版 schema 除主键外逐字相同，见 2026-10-12 切换方案 §1）。
+    """
     names = _load_industry_names()
     name_to_code = {v: k for k, v in names.items()}
+    is_chain = (source == "chain_mainline")
+    id_key = "chain_id" if is_chain else "group_id"
 
     rows: List[Dict] = []
     for _, r in df.iterrows():
-        member_names = _parse_group_list(r.get("group_names"))
+        member_names = _parse_group_list(r.get(names_col))
         matched = [(n, name_to_code[n]) for n in member_names if n in name_to_code]
         if not matched:
-            logger.warning("主线方向群 %s 成员名未匹配到行业代码: %s",
-                           r.get("group_id"), member_names)
+            logger.warning("主线%s %s 成员名未匹配到行业代码: %s",
+                           label, r.get(id_col), member_names)
             continue
+        raw_id = r.get(id_col)
+        id_val = str(raw_id) if is_chain else _num(raw_id)
         for name, code in matched:
             rows.append(make_row(
-                source="mainline",
+                source=source,
                 signal_date=obs_date,   # 每日状态快照
                 ind_code=code,
                 ind_name=name,
@@ -188,8 +226,8 @@ def _snapshot_mainline(obs_date: str) -> List[Dict]:
                 tier=str(r.get("stage", "")),
                 obs_type="state",
                 features={
-                    "group_id": _num(r.get("group_id")),
-                    "group_names": member_names,
+                    id_key: id_val,
+                    names_col: member_names,
                     "n_industries": _num(r.get("n_industries")),
                     "excess_ma20": _num(r.get("excess_ma20")),
                     "winrate": _num(r.get("winrate")),
@@ -200,15 +238,49 @@ def _snapshot_mainline(obs_date: str) -> List[Dict]:
     return rows
 
 
+def _read_mainline_frame(path) -> Optional[pd.DataFrame]:
+    if not path.exists():
+        logger.warning("主线产物不存在，跳过快照: %s", path.name)
+        return None
+    df = pd.read_csv(path)
+    if "is_mainline" not in df.columns:
+        return None
+    return df[df["is_mainline"] == True]  # noqa: E712
+
+
+def _snapshot_mainline(obs_date: str) -> List[Dict]:
+    df = _read_mainline_frame(MAINLINE_PATH)
+    if df is None or df.empty:
+        return []
+    return _snapshot_from_frame(df, obs_date, "mainline", "group_id", "group_names", "方向群")
+
+
+def _snapshot_chain_mainline(obs_date: str) -> List[Dict]:
+    """链版主线快照（source=`chain_mainline`）。
+
+    🆕 2026-10-12：链版产物 step7b 每日产出，此前**无人消费**（日报与台账都读旧版）。
+    成员名解析率实测 192/192 ⇒ 不会因匹配失败而整链跳过。
+    """
+    df = _read_mainline_frame(CHAIN_MAINLINE_PATH)
+    if df is None or df.empty:
+        return []
+    return _snapshot_from_frame(df, obs_date, "chain_mainline", "chain_id", "chain_names", "产业链")
+
+
 def snapshot_signals(
     trade_date: str,
-    sources: Sequence[str] = ("mainline",),
+    sources: Sequence[str] = ("mainline", "chain_mainline"),
 ) -> List[Dict]:
     """采集当日快照信号（主线成员行业状态）。
 
     🔴 2026-10-06：`tracker_pool` 已弃用，其快照分支与 `_snapshot_tracker` 一并移除。
+    🆕 2026-10-12：新增 `chain_mainline`（链版）。
+        ⚠️ 两个调用方（cron / build_signals_log）**都不传 sources** ⇒ 必须改**默认元组**，
+        否则新来源永远采不到（切换方案 P0-2）。
     """
     rows: List[Dict] = []
     if "mainline" in sources:
         rows += _snapshot_mainline(trade_date)
+    if "chain_mainline" in sources:
+        rows += _snapshot_chain_mainline(trade_date)
     return rows

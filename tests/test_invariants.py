@@ -25,6 +25,7 @@ import pandas as pd
 from _common import (
     EXPECTED_COLUMNS,
     LEDGER_VALID_SOURCES,
+    PENDING_UNDER_TEST,
     RANGE_CONSTRAINTS,
     REGIME_VALID_LABELS,
     TOLERATED_MISSING,
@@ -72,6 +73,10 @@ class TestArtifactSchema(unittest.TestCase):
         bad = []
         tolerated_notes = []
         for name, expected in EXPECTED_COLUMNS.items():
+            # 预备白名单（未激活）跳过 —— 它们的产物还没进生产链路、没登记 ARTIFACTS，
+            # 直接 UNDER_TEST[name] 会 KeyError。激活方式见 tests/_common.py:PENDING_UNDER_TEST。
+            if name in PENDING_UNDER_TEST:
+                continue
             path = UNDER_TEST[name]
             if not path.exists():
                 continue
@@ -103,6 +108,8 @@ class TestArtifactSchema(unittest.TestCase):
     def test_column_order_hint(self):
         """列序变化通常无害，只提示不失败。"""
         for name, expected in EXPECTED_COLUMNS.items():
+            if name in PENDING_UNDER_TEST:
+                continue
             path = UNDER_TEST[name]
             if not path.exists():
                 continue

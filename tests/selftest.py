@@ -53,6 +53,8 @@ NEED = {
         "industry_members_daily.parquet", "industry_members.parquet",
         "daily_regime.parquet", "industry_nav_924.parquet",
         "mainline_detection.csv",
+        # B2（2026-10-12）：链版主线产物（22 列），与旧版并存
+        "chain_mainline_detection.csv",
         # 🔴 2026-10-06：tracker_report.csv 随跟踪池弃用从沙箱必需清单移除
     ],
     "signals": ["signals_log.parquet"],
@@ -76,6 +78,17 @@ def case(name: str, expect: str):
 def b1():
     p = SB / "industry/industry_daily_full.parquet"
     pd.read_parquet(p).drop(columns=["breadth_ma13"]).to_parquet(p, index=False)
+
+
+@case("链版产物删列 → B2 schema 漂移", "test_columns_exact_set")
+def b_chain_mainline():
+    """B2（2026-10-12）激活的 22 列契约，必须真能被抓到。
+
+    2026-10-12 接线时已手工验证过一次（沙箱删 resonance_z_today ⇒ 测试红），
+    这里固化成 selftest 场景，防止以后有人改链版列名时静默通过。
+    """
+    p = SB / "industry/chain_mainline_detection.csv"
+    pd.read_csv(p).drop(columns=["resonance_z_today"]).to_csv(p, index=False)
 
 
 @case("删掉一个行业的全部行 → 行业集合探针", "test_industry_sets_identical_across_artifacts")

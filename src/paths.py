@@ -82,6 +82,12 @@ ARTIFACTS = {
     "daily_regime":              (INDUSTRY_DIR / "daily_regime.parquet", "derived"),
     "monthly_regime_summary":    (INDUSTRY_DIR / "monthly_regime_summary.csv", "derived"),
     "mainline_detection":        (INDUSTRY_DIR / "mainline_detection.csv", "derived"),
+    # ── B2（2026-10-12）：链版主线探测产物，与旧版 mainline_detection **并存** ──
+    #   来源 scripts/chain_mainline_detector.py（生产十步链第 7b 步）。
+    #   22 列契约见 tests/_common.py::EXPECTED_COLUMNS["chain_mainline_detection"]。
+    #   ⚠️ 登记了就必须存在，否则 --audit-writes 报「登记了但不存在」；
+    #      若 B2 回退下线，须同步摘除本登记。
+    "chain_mainline_detection":  (INDUSTRY_DIR / "chain_mainline_detection.csv", "derived"),
     # 🔴 2026-10-06 摘除 tracker_report —— 跟踪池装置已弃用（计划 §5.1/第 5 批）。
     #   产物文件由源端删除；此处同步摘登记，否则 --audit-writes 会报「登记了但不存在」。
     "industry_universe":         (DATA_DIR / "industry_universe.parquet", "derived"),
