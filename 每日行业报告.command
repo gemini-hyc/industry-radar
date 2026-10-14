@@ -10,7 +10,8 @@
 #    4. scripts/update_industry_factor.py        拥挤度因子 ind_crowd
 #    5. scripts/build_style_panel.py             风格因子面板 X/f（复现三件套①）
 #    6. scripts/measure_chain_resonance.py       链共振测量 + 退化探针（复现三件套②③）
-#    7. scripts/mainline_detector.py             主线探测
+#    7. scripts/mainline_detector.py             主线探测（旧版：全市场自由聚类群）
+#   7b. scripts/chain_mainline_detector.py      链版主线探测（B2：方案 C · 37 链，与旧版并存）
 #    8. scripts/regime_classifier.py             行情 regime
 #    9. scripts/build_nav_924.py                 行业走势主表（924 起累计净值）
 #   10. cron/industry_review_daily.py            日报（自带前置补齐 + 完备性检查兜底）
@@ -25,6 +26,24 @@
 #     · 第 6 步会直接读第 5 步落盘的 industry_style_factors.parquet（不重算）。
 #     · 第 6 步退出码语义：0=探针健康，2=探针判定退化（**产物照样落盘**，日报正文
 #       会自动带「未调整（因子面板不可用）」标注）。退化不是崩链，故仍继续后续步骤。
+#
+#  🟢 2026-10-12：接入链版主线探测（B2），十步链 → 十步 + 7b
+#     · 第 7b 步与第 7 步**并存**，产物是两份不同文件，互不覆盖：
+#       旧版 industry/mainline_detection.csv（19 列）/ 新版 industry/chain_mainline_detection.csv（22 列）
+#     · 新版依赖第 6 步的 chain_resonance_daily.csv，必须排在其后
+#     · 暂不替换旧版：口径变更影响面大，先并存观察，台账见
+#       research/observation_snapshot.py → _local_dev/observation_log.csv
+#     · 依据 docs/plan/chain-mainline-backfill-diagnosis-2026-10-12.md（1638 天回溯支持 B2）
+#
+#  🟢 2026-10-15：日报**重排**为方向 B 五章（主人拍板「重排 + 旧三章不保留」）
+#     · 旧「主线状态 / 行情 regime / 链共振」三章从日报下线：
+#       主线信息并入注意力梯队 T1，regime 并入综合判读的「市场宽度」一句，
+#       链共振降级为梯队/异动的**输入**（随行业出表，不再单独成章）。
+#     · 日报正文由 src/daily_review/attention_radar.py 一次性产出，
+#       cron 不再追加任何附加章节。
+#     · ⚠️ 第 7/7b/8 步的**脚本暂不下线**：chain_mainline_detection.csv 仍提供
+#       37 条链定义（方向 B 的链共振输入），daily_regime 仅不再渲染。
+#       十步链的精简（是否下线 7/7b/8）待主人另行确认。
 #
 #  成功后自动用系统文本编辑（TextEdit）打开当日报告；运行日志留存于 logs/。
 #  调试: DRY_RUN=1 bash 每日行业报告.command （只打印将执行的命令，不计算不写数据）
@@ -136,7 +155,15 @@ main() {
     run_step "4/10 拥挤度因子 ind_crowd"    "$PY" "scripts/update_industry_factor.py"
     run_step "5/10 风格因子面板X/f"        "$PY" "scripts/build_style_panel.py"
     run_degrade_step "6/10 链共振测量+探针"  "$PY" "scripts/measure_chain_resonance.py"
-    run_step "7/10 主线探测"              "$PY" "scripts/mainline_detector.py"
+    run_step "7/10 主线探测(旧版聚类)"   "$PY" "scripts/mainline_detector.py"
+    # ── B2（2026-10-12）：链版主线探测，与旧版**并存**跑，产物是两份不同文件 ──
+    #    旧版 → industry/mainline_detection.csv      （19 列，group_id 开头）
+    #    新版 → industry/chain_mainline_detection.csv（22 列，chain_id 开头）
+    #    为什么要并存而非直接替换：新版口径变更影响面大，先让两份产物同时在
+    #    日更链里跑一段时间，用 research/observation_snapshot.py 记账对照，
+    #    稳定后再决定是否下线旧版。任一步失败都不中断后续步骤。
+    #    新版依赖第 6 步产出的 chain_resonance_daily.csv ⇒ 必须排在其后。
+    run_step "7b/10 链版主线探测(B2)"   "$PY" "scripts/chain_mainline_detector.py"
     run_step "8/10 行情 regime"           "$PY" "scripts/regime_classifier.py"
     run_step "9/10 行业走势主表(924起)"    "$PY" "scripts/build_nav_924.py"
     run_step "10/10 生成日报 ($TRADE_DATE)" "$PY" "cron/industry_review_daily.py" "--date" "$TRADE_DATE"

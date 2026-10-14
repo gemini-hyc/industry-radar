@@ -262,25 +262,14 @@ if __name__ == "__main__":
 
     report = run(trade_date)
 
-    # ── 追加链路其余产出（主线 / regime）──
-    # 只读现有产出，不重算；任一环节异常都不影响主报告
-    # 🔴 2026-10-06：跟踪池、冷区资金面、宽度状态三节已随对应来源弃用而移除。
-    extra = ""
-    try:
-        from src.daily_review.report_sections import append_to_report, build_extra_sections
-
-        extra = build_extra_sections(trade_date)
-        if append_to_report(trade_date, extra) is None:
-            extra = ""  # 主报告未落盘（非交易日/写入失败）→ 附加章节也不展示
-        else:
-            print("\n[附加章节] 已追加 主线状态 / 行情 regime 至报告文件")
-    except Exception as e:
-        extra = ""
-        print(f"⚠️ 附加章节生成失败（不影响主报告）: {e}")
-
+    # ── 日报正文 ──
+    # 🟢 2026-10-15：日报**重排**为方向 B 五章（今日一句话 / 注意力梯队 / 今日异动 /
+    #    事件日历 / 综合判读+数据校验），正文已由 attention_radar 在 run() 内一次性产出。
+    #    🔴 旧的「追加主线状态 / 行情 regime / 链共振」三章已下线（主人拍板不保留）：
+    #       主线信息并入注意力梯队 T1，regime 并入综合判读的市场宽度，
+    #       链共振降级为梯队与异动的输入（随行业出表，不再单独成章）。
+    #    ⇒ 此处不再追加任何内容。
     print(report)
-    if extra:
-        print(extra)
 
     # ── 数据完备性检查（防静默缺数）──
     # 报告已落盘后再检查：目标是暴露「文件有行但行业/列悄悄为空」的情况

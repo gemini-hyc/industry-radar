@@ -1,21 +1,26 @@
 """
-每日复盘系统 · 模块二：行业跟踪
+每日复盘 · 行业雷达日报**编排与落盘**
 
-🔴 2026-10-06 三区框架（冷区/中区/热区）整体退场。
-   原因（依据 docs/plan/retirement-breadth-tracker-plan.md）：
-     - 冷区宽度反转：宽度→未来收益无预测力（IC ≈ −0.004，非重叠 t = −0.74）；
-       以冷区为前提的 2×2 条件检验交互项 ≈ −0.01pp，**无交互**。
-     - 中区/热区：**从未实现**，一直是"待实现"占位，无任何实证内容。
-     - 结构化结论 JSON 的唯一消费者（冷区资金面章节）已随之删除 ⇒ 整体摘除。
-   ⇒ 本模块现在**只负责行业层面的状态读数**（前置检查 + 当日快照生成），
-     不再产出任何信号章节。报告主体章节由新体系按需重建。
+🔴 2026-10-15 重排（主人拍板：日报重排为方向 B 五章，旧三章不保留）
+==================================================================
+本模块的职责收敛为三件事：
+  1. **前置检查**（check_prerequisites）—— 供 cron 判断数据是否就绪、缺什么；
+  2. **编排**：调用 `attention_radar.build_report_markdown()` 生成方向 B 日报正文；
+  3. **落盘**：经 `resolve_output_path` 从端写保护 + provenance 指纹写入当日报告。
 
-数据源：
-  - 行业日频数据 → data/industry/industry_daily.parquet
-  - 行业成员映射 → data/industry/industry_members.parquet
-  - 行业名称列表 → data/industry/industry_list.parquet
-  - 拥挤度因子 → data/factors/ind_crowd_turnover_daily.parquet
-  - 行业加权涨跌幅 → data/industry/industry_weighted_returns.parquet
+不再自己渲染任何章节。历史沿革（保留以免重蹈）：
+  - 2026-10-06 三区框架（冷区/中区/热区）整体退场：冷区宽度反转无预测力
+    （IC≈−0.004，非重叠 t=−0.74），中区/热区从未实现。
+  - 2026-10-15 旧的「当日行业数据状态」占位章删除 —— 它只是三区退场后的空壳，
+    对「今天看哪个行业」毫无信息；由方向 B 的「今日一句话」取代。
+
+数据源（方向 B 实际读取，见 attention_radar）：
+  - 行业加权涨跌幅 → industry/industry_weighted_returns.parquet
+  - 行业等权日频聚合 → industry/industry_daily_full.parquet（成交额/avg_pct）
+  - 剥风格残差面板 → industry/industry_residual_panel.parquet（自算链共振历史）
+  - 行业走势净值 → industry/industry_nav_924.parquet（相对强度 rs_w）
+  - 链定义 → industry/chain_mainline_detection.csv（37 条已验证链）
+  - 事件 → reports/forecast/、reports/broker_recommend/、policy/sector_policy_map.json
 """
 
 import logging
@@ -31,7 +36,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))  # 兼容脚本直跑: python3 src/daily_review/module_02_industry.py
-from src.paths import DATA_DIR
+from src.paths import DATA_DIR, INDUSTRY_DIR
 from src.utils.provenance import save_dataframe, save_text
 
 # 数据路径常量
@@ -356,111 +361,72 @@ def fmt_amount(val: float) -> str:
 
 def run(trade_date: str = None) -> str:
     """
-    运行行业跟踪模块，返回 Markdown 格式报告。
+    生成当日行业雷达日报（方向 B · 注意力分配），落盘并返回 Markdown。
 
-    🔴 2026-10-06：三区框架已退场，本函数不再输出信号章节，
-       只做前置检查 + 当日行业数据状态读数（详见模块 docstring）。
+    🔴 2026-10-15：日报**重排**为方向 B 五章（今日一句话 / 注意力梯队 / 今日异动 /
+       事件日历 / 综合判读+数据校验）。正文全部由 `attention_radar` 产出，
+       本函数只负责「非交易日防护 + 编排 + 落盘」，不再自己渲染任何章节。
 
     参数:
         trade_date: 交易日期，默认为今天
 
     返回:
-        Markdown 格式的行业跟踪报告
+        Markdown 格式的行业雷达日报
     """
     if trade_date is None:
         trade_date = datetime.now().strftime("%Y-%m-%d")
 
-    # 标题
     weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     td = datetime.strptime(trade_date, "%Y-%m-%d")
     weekday = weekday_names[td.weekday()]
 
-    # 周末/非交易日防护
+    # 周末/非交易日防护：直接返回且**不落盘**
+    # （落盘会在数据根留下空壳日报，下游完备性检查会把它当成「已生成」）
     if td.weekday() >= 5:
         return (
-            f"# 📊 行业跟踪 · {trade_date}（{weekday}）\n\n"
-            f"⏸️ 今日为非交易日（{weekday}），跳过行业跟踪。\n"
+            f"# 📊 行业雷达 · {trade_date}（{weekday}）\n\n"
+            f"⏸️ 今日为非交易日（{weekday}），跳过行业雷达。\n"
         )
 
-    lines = [
-        f"# 📊 行业跟踪 · {trade_date}（{weekday}）",
-        "",
-    ]
-
-    errors: List[str] = []
-
-    # ── 加载数据 ──
-    daily_data = None
+    # ── 编排：正文由 attention_radar 产出（内部每章独立降级）──
     try:
-        daily_data = load_or_compute_industry_daily(days=80, end_date=trade_date)
+        from src.daily_review.attention_radar import build_report_markdown
+
+        report_md = build_report_markdown(trade_date)
     except Exception as e:
-        logging.error("行业日频数据加载失败: %s", e, exc_info=True)
-        errors.append(f"行业日频数据加载失败: {e}")
-        lines.append(f"⚠️ 行业日频数据加载失败：{e}")
-        lines.append("")
-        report_md = "\n".join(lines)
-        return report_md
+        logging.error("方向B 日报生成失败: %s", e, exc_info=True)
+        report_md = "\n".join([
+            f"# 📊 行业雷达 · {trade_date}（{weekday}）",
+            "",
+            f"> ⚠️ 日报生成失败：{e}",
+            "",
+            "> 排查：确认 `industry_weighted_returns` / `industry_daily_full` / "
+            "`industry_residual_panel` / `industry_nav_924` / `chain_mainline_detection` "
+            "五份产物均已更新到该交易日。",
+        ])
 
-    names = {}
+    # ── 落盘 ──
+    # ⚠️ 路径必须经 resolve_output_path（从端写保护）：本机数据根是源端单向同步的副本，
+    #    直接写既会被下次 pull 覆盖、又可能污染下游。旧实现绕过该保护，此处已修正。
     try:
-        names = load_industry_names()
-    except Exception as e:
-        logging.warning("行业名称加载失败: %s", e)
+        from src.daily_review.report_sections import resolve_report_path
 
-    # 加载行业成员映射（多处使用，提前加载）
-    members = load_industry_members()
-
-    # 拥挤度映射
-    crowding_map = {}
-    try:
-        crowding_df = aggregate_industry_crowding(trade_date, members)
-        if not crowding_df.empty:
-            crowding_map = dict(zip(crowding_df["ind_code"], crowding_df["crowding_median"]))
-    except Exception as e:
-        logging.warning("拥挤度聚合失败（非致命）: %s", e)
-
-    # ── 行业层面的状态读数 ──
-    # 🔴 2026-10-06：三区框架（冷区/中区/热区）整体退场（主人拍板，与冷区同步清理）。
-    #    冷区：无预测力且 2×2 交互项 ≈ −0.01pp；中区/热区：从未实现，一直是空占位。
-    #    本模块现在只报「当日行业数据是否齐备」，不再输出任何信号章节。
-    lines.append("📌 **当日行业数据状态**")
-    lines.append("")
-    try:
-        n_ind = daily_data["con_code"].nunique() if len(daily_data) else 0
-        n_days = daily_data["date"].nunique() if len(daily_data) else 0
-        lines.append(f"- 行业数：**{n_ind}**　·　窗口交易日：**{n_days}**"
-                     f"（截至 {trade_date}）")
-        lines.append(f"- 拥挤度覆盖：**{len(crowding_map)}** 个行业")
-    except Exception as e:
-        logging.warning("状态读数渲染失败（非致命）: %s", e)
-        lines.append(f"- ⚠️ 状态读数不可用：{e}")
-    lines.append("")
-    lines.append("> 旧「宽度反转（冷区）」章节已随宽度预测用途弃用而移除；"
-                 "中区/热区从未实现，一并清空。")
-    lines.append("> 本节只报数据是否齐备，**不含任何预测**。")
-
-    # ── 错误汇总 ──
-    if errors:
-        lines.append("")
-        lines.append("⚠️ **错误汇总：**")
-        for err in errors:
-            lines.append(f"- {err}")
-
-    report_md = "\n".join(lines)
-
-    # ── 持久化报告 ──
-    try:
-        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-        report_path = save_text(
-            report_md, REPORTS_DIR / f"{trade_date}_industry_review.md",
+        report_path = resolve_report_path(trade_date)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        save_text(
+            report_md, report_path,
             producer="src/daily_review/module_02_industry.py",
             params={"trade_date": trade_date, "kind": "industry_review_report",
-                    "n_errors": len(errors)},
-            inputs=[WEIGHTED_RETURNS_PATH, INDUSTRY_DAILY_CACHE],
+                    "layout": "direction_b_v1"},
+            inputs=[WEIGHTED_RETURNS_PATH,
+                    INDUSTRY_DIR / "industry_daily_full.parquet",
+                    INDUSTRY_DIR / "industry_residual_panel.parquet",
+                    INDUSTRY_DIR / "industry_nav_924.parquet",
+                    INDUSTRY_DIR / "chain_mainline_detection.csv"],
         )
-        logging.info("行业跟踪报告已保存: %s", report_path)
+        logging.info("行业雷达日报已保存: %s", report_path)
     except Exception as e:
-        logging.error("行业跟踪报告保存失败: %s", e)
+        logging.error("行业雷达日报保存失败: %s", e)
 
     return report_md
 
