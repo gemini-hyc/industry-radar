@@ -338,13 +338,19 @@ def cross_validate(target) -> pd.DataFrame:
             logger.warning("交叉校验·个股等权失败: %s", e)
 
     # ② 全市场市值加权
+    # 🔴 2026-10-15：权重必须用**前一交易日** circ_mv（t-1 收盘建仓、拿到 t 收盘的持有收益）。
+    #    旧写法 Σ(pctChg_t × circ_mv_t)/Σcirc_mv_t 的数学偏差 ≈ +Var_w(r)，
+    #    实测约 +6bp/日 ⇒ 这一源会系统性高于其它源，污染「背离告警」判断。
     db = BASIC_DIR / f"{dstr}.parquet"
     if f.exists() and db.exists():
         try:
             md = pd.read_parquet(f, columns=["code", "pctChg"])
-            b = pd.read_parquet(db, columns=["ts_code", "circ_mv"])
+            prev_stems = [p.stem for p in BASIC_DIR.glob("*.parquet") if p.stem < dstr]
+            bfile = (BASIC_DIR / f"{max(prev_stems)}.parquet") if prev_stems else db
+            b = pd.read_parquet(bfile, columns=["ts_code", "circ_mv"])
             b["code"] = ts_to_futu(b["ts_code"])
             j = md.merge(b[["code", "circ_mv"]], on="code", how="inner").dropna()
+            j = j[j["circ_mv"] > 0]
             if len(j):
                 w = (j["pctChg"] * j["circ_mv"]).sum() / j["circ_mv"].sum()
                 rows.append(("全市场市值加权", w, np.nan, len(j)))

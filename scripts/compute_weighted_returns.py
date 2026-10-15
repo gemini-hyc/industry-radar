@@ -2,7 +2,23 @@
 """
 计算行业市值加权涨跌幅，产出 data/industry/industry_weighted_returns.parquet
 
-公式: weighted_pct = Σ(pctChg × circ_mv) / Σ(circ_mv)
+公式（2026-10-15 修正）：weighted_pct = Σ(pctChg_t × circ_mv_{t-1}) / Σ circ_mv_{t-1}
+
+🔴 权重口径修正（2026-10-15）：
+  旧口径用**当日收盘** circ_mv 加权**当日**涨跌幅，数学偏差 ≈ +Var_w(r)（行业内加权
+  收益方差），实测 **+6bp/日 ≈ +15%/年**。同一天同一批股票只换权重的对照实验：
+    2019-2025 累计  当日市值加权 +272.8%  /  前一日市值加权 +53.9%  /  中证全指对照
+  逐年看，改前一日权重后几乎贴合中证全指；旧口径每年虚增 10~25pp。
+  更致命的是偏差**不等于常数**：Δ行业 = Var_w(r_行业)，取决于行业内部分散度，
+  低估值（老经济、低波动）行业虚增更少 ⇒ 在 EX = R − mkt 中**不抵消**，其超额被
+  系统性压低。详见 research/prosperity/05ah_加权口径缺陷与事件研究复验.md。
+
+  经济含义：portfolio 在 t-1 收盘按当时市值建仓，持有到 t 收盘 ⇒ 当日组合收益
+  恰为 Σ w_{t-1} · r_t，w_{t-1} = circ_mv_{t-1} / Σ circ_mv_{t-1}。这才是可实现的
+  持有收益；用当日市值加权当日收益，等于用「收盘后才知道的权重」去赚当日的钱。
+
+边界：窗口首个交易日无前一日 circ_mv（数据起点 2020-01-02），该日回落为当日
+  市值加权并在产物里记 n_weight_fallback。全历史仅影响 1 天 / 1642 天。
 
 异常样本剔除（2026-10-01）：
   当日无涨跌幅限制的观测（新股/复牌/退市整理）不计入聚合，否则会在行业内
@@ -22,6 +38,9 @@ from src.utils.provenance import save_dataframe
 
 OUT_PATH = INDUSTRY_DIR / "industry_weighted_returns.parquet"
 
+# 求前一交易日权重时，向窗口起点之前回溯的日历天数（cover 节假日，取到最近若干个交易日）
+LAG_LOOKBACK_DAYS = 10
+
 
 def ts_to_bs(ts_code: str) -> str:
     """000001.SZ → sz.000001"""
@@ -31,7 +50,11 @@ def ts_to_bs(ts_code: str) -> str:
     return ts_code
 
 
-def main(days: int = 250):
+def main(days: int = 250, weight_day: str = "prev"):
+    """
+    weight_day:  'prev'（默认，2026-10-15 修正口径）用**前一交易日** circ_mv 作权重
+                 'same'（旧口径，仅供对照复现）用当日 circ_mv 作权重
+    """
     # ── 1. 加载每日行业成分快照（消前视偏差；替代当前静态成员表）──
     members_daily_path = INDUSTRY_DIR / "industry_members_daily.parquet"
     if not members_daily_path.exists():
@@ -108,7 +131,15 @@ def main(days: int = 250):
     # （market/daily 与 daily_basic 的文件名同为 YYYY-MM-DD.parquet，直接按 stem 对齐）
     all_basic_files = sorted(BASIC_DIR.glob("*.parquet"))
     wanted_days = {f.stem for f in market_files}
-    basic_files = [f for f in all_basic_files if f.stem in wanted_days]
+    # 「前一交易日」加权口径需要额外的 lag 补给：窗口起点之前若干个交易日的 basic，
+    # 否则窗口首日取不到 circ_mv_{t-1}，会被迫回落当日权重（引入旧口径偏差）
+    lag_files = []
+    if weight_day == "prev" and wanted_days:
+        lo_stem = min(wanted_days)
+        lag_cut = pd.Timestamp(lo_stem) - pd.Timedelta(days=LAG_LOOKBACK_DAYS)
+        lag_files = [f for f in all_basic_files
+                     if f.stem < lo_stem and pd.Timestamp(f.stem) >= lag_cut]
+    basic_files = [f for f in all_basic_files if f.stem in wanted_days] + lag_files
     basic_parts = []
     for f in basic_files:
         df = pd.read_parquet(f, columns=["ts_code", "trade_date", "circ_mv"])
@@ -118,21 +149,48 @@ def main(days: int = 250):
         basic_parts.append(df[["date", "code", "circ_mv"]])
 
     basic = pd.concat(basic_parts, ignore_index=True)
-    print(f"市值: {len(basic)} 条 ({basic['date'].nunique()} 个交易日)")
+    print(f"市值: {len(basic)} 条 ({basic['date'].nunique()} 个交易日)"
+          + (f"；含窗口外 lag 补给 {len(lag_files)} 天" if lag_files else ""))
+
+    # ── 3b. 构造「前一交易日」权重基准（核心修正点）──
+    if weight_day == "prev":
+        if len(lag_files) == 0:
+            print("⚠️ 窗口外无 basic 文件可取 lag ⇒ 窗口首日将回落当日权重（旧口径）")
+        basic = basic.sort_values(["code", "date"]).reset_index(drop=True)
+        basic["circ_mv_prev"] = basic.groupby("code")["circ_mv"].shift(1)
+        basic["prev_date"] = basic.groupby("code")["date"].shift(1)
+    else:
+        print("⚠️ weight_day='same'：旧口径（当日市值加权当日涨跌幅）"
+              "，含 +Var_w(r) 系统性正偏差，仅用于对照复现")
 
     # ── 4. 合并 ──
     merged = market.merge(basic, on=["date", "code"], how="inner")
     print(f"合并后: {len(merged)} 条")
 
-    # ── 5. 计算加权涨跌幅：Σ(pctChg × circ_mv) / Σ(circ_mv) ──
-    merged["weight"] = merged["pctChg"] * merged["circ_mv"]
+    # ── 5. 加权涨跌幅 ──
+    #   prev（默认/正确）: Σ(pctChg_t × circ_mv_{t-1}) / Σ circ_mv_{t-1}
+    #   same（旧口径）   : Σ(pctChg_t × circ_mv_t)     / Σ circ_mv_t
+    if weight_day == "prev":
+        bad = merged["circ_mv_prev"].isna() | (merged["circ_mv_prev"] <= 0)
+        n_w_fallback = int(bad.sum())
+        merged["w"] = merged["circ_mv_prev"].where(~bad, merged["circ_mv"])
+        gap = (merged["date"] - merged["prev_date"]).dt.days
+        print(f"权重基准确认: 前一交易日 circ_mv；lag 间隔中位 {gap.median():.0f} 天，"
+              f"回落当日值 {n_w_fallback} 条（{n_w_fallback / max(len(merged), 1) * 100:.3f}%）")
+    else:
+        n_w_fallback = 0
+        merged["w"] = merged["circ_mv"]
+
+    merged["weight"] = merged["pctChg"] * merged["w"]
     g = merged.groupby(["date", "ind_code"])
     result = g.agg(
         weighted_pct=("weight", "sum"),
-        circ_mv=("circ_mv", "sum"),
+        circ_mv=("circ_mv", "sum"),     # 注意：仍为**当日**市值合计（size 语义，非权重）
         stock_n=("code", "nunique"),
+        wsum=("w", "sum"),
     ).reset_index()
-    result["weighted_pct"] = result["weighted_pct"] / result["circ_mv"]
+    result["weighted_pct"] = result["weighted_pct"] / result["wsum"]
+    result = result.drop(columns=["wsum"])
 
     # ── 6. 保存（按日期 upsert：只替换本次窗口内的日期，保留窗口外历史）──
     # 注意：不可整文件覆盖 —— cron 每日以 --days 5 调用，覆盖写会把历史截断为 5 天
@@ -162,9 +220,11 @@ def main(days: int = 250):
         result, OUT_PATH,
         producer="scripts/compute_weighted_returns.py",
         params={"days": days, "weight": "circ_mv",
+                "weight_day": weight_day,  # prev=前一交易日加权（2026-10-15 修正）/ same=旧口径
                 "abnormal_filter": "no_limit_flags+list_dates"},
         inputs=[members_daily_path, MARKET_DIR, BASIC_DIR, STK_LIMIT_DIR],
         extra={"n_abnormal_dropped": n_dropped, "n_abnormal_scanned": n_raw,
+               "n_weight_fallback": n_w_fallback,
                "skipped_days_no_snapshot": [str(d.date()) for d in sorted(skipped)]},
     )
     print(f"\n✓ 保存: {written}")
@@ -188,5 +248,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=250, help="回溯天数")
+    parser.add_argument("--weight-day", dest="weight_day", choices=["prev", "same"],
+                        default="prev",
+                        help="权重取值日：prev=前一交易日 circ_mv（默认，2026-10-15 修正口径）；"
+                             "same=当日 circ_mv（旧口径，含 +Var_w(r) 正偏差，仅供对照复现）")
     args = parser.parse_args()
-    main(days=args.days)
+    main(days=args.days, weight_day=args.weight_day)
