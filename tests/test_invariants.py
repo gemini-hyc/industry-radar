@@ -146,6 +146,19 @@ class TestKeyIntegrity(unittest.TestCase):
 class TestGridCompleteness(unittest.TestCase):
     """③ 完整网格 —— 行业 × 交易日 应为满格；缺格 = 静默漏算（而非报错）。"""
 
+    # 🔴 2026-10-15：industry_weighted_returns 的网格基准改为 industry_members_daily。
+    #    原因：SW2021 分类改革把「电子化学品Ⅱ / 休闲食品 / 房地产服务 / 旅游零售Ⅱ」
+    #    4 个行业的建立日定在 **2021-07-30**（index_member_all_raw 里最早 in_date=20210730），
+    #    此前它们本就不该有行。旧判据要求「131 行业 × 1642 日」满格，等于倒逼 1528 格
+    #    不存在行业的假数据 —— 旧表里那些 2020 年的行正是 PIT 成员改造前的陈旧残留。
+    #    新判据更强：要求与当日真实成员**双向一致**（零缺、零多余），既防漏算也防幽灵行。
+    GRID_FROM_MEMBERS = {"industry_weighted_returns": "ind_code"}
+
+    @staticmethod
+    def _pairs(df, icol):
+        d = pd.to_datetime(df["date"])
+        return set(zip(d.tolist(), df[icol].tolist()))
+
     def test_full_grid(self):
         for name, icol in [
             ("industry_daily_full", "con_code"),
@@ -156,12 +169,28 @@ class TestGridCompleteness(unittest.TestCase):
                 continue
             with self.subTest(artifact=name):
                 df = load(name)
+                if name in self.GRID_FROM_MEMBERS:
+                    self._assert_grid_matches_members(name, icol, df)
+                    continue
                 ni, nd = df[icol].nunique(), df["date"].nunique()
                 self.assertEqual(
                     ni * nd, len(df),
                     f"{name}: {ni} 行业 × {nd} 交易日 = {ni*nd:,}，实际 {len(df):,} "
                     f"⇒ 缺 {ni*nd - len(df)} 格（或有多余组合）",
                 )
+
+    def _assert_grid_matches_members(self, name, icol, df):
+        mem = load("industry_members_daily")
+        exp = self._pairs(mem, icol)
+        act = self._pairs(df, icol)
+        miss, extra = exp - act, act - exp
+        self.assertFalse(
+            miss or extra,
+            f"{name} 与 industry_members_daily 的「行业-天」网格不一致："
+            f"有成员却无收益行 {len(miss)} 格、无成员却有收益行 {len(extra)} 格"
+            + (f"。缺失样例 {sorted(miss)[:3]}" if miss else "")
+            + (f"。多余样例 {sorted(extra)[:3]}" if extra else ""),
+        )
 
     def test_members_daily_not_grid(self):
         """PIT 成员表**刻意**不是满格（每日真实成分不同）—— 反向断言，防误改。"""
