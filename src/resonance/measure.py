@@ -70,7 +70,25 @@ def residualize(R: pd.DataFrame, F: pd.DataFrame,
             valid = np.isfinite(col).mean()
             cols_ok.append(bool(valid >= C.MIN_WINDOW_VALID_RATIO))
         keep = [0, 1] + [2 + j for j, ok in enumerate(cols_ok[2:]) if ok]
-        n_use[dates[t]] = sum(cols_ok[2:])
+
+        # ⚠️ 窗口覆盖达标 ≠ **当日**有值。t 日缺失的因子必须从 keep 里剔除：
+        #    否则 A1_full[t, keep] @ b1 一个 NaN 会把当日**全部 131 个行业**的残差
+        #    一起污染成 NaN —— 以点坏面。
+        #    实测 2026-10-21：daily_basic 的 pb/pe_ttm 整列全空（行齐列空，5568 行
+        #    但两列 0 非空）→ value 因子当日 NaN → 整日 adj 全灭 → rolling_corr 的
+        #    250 日窗口把 NaN 传染到之后 60+ 个交易日 → 74 条链 resonance_adj 全部
+        #    失效、金丝雀探针报 CANARY_MISSING。**整条链上没有任何一处报错**，
+        #    日报只是悄悄退回「未调整值」。
+        #    这里改为「当日缺谁就少用谁」：降级但不断链，降级天由 n_factors_used 反映。
+        t_day = A1_full[t]
+        if not np.isfinite(t_day[:2]).all():
+            # 截距 / 市场基准当日缺失 = 当天真的没有横截面数据，不该硬算
+            b_std[dates[t]] = np.nan
+            continue
+        dropped = [c for c in keep[2:] if not np.isfinite(t_day[c])]
+        if dropped:
+            keep = [c for c in keep if c not in dropped]
+        n_use[dates[t]] = len(keep) - 2
 
         A1 = A1_full[lo:t][:, keep]
         y = X[lo:t]
@@ -90,11 +108,16 @@ def residualize(R: pd.DataFrame, F: pd.DataFrame,
             X_raw[t] = X[t] - A0_full[t] @ b0
 
     beta_rows = []
+    # keep_cols 是**列索引**（可能不连续，如 [0,1,2,4,5,6] 剔掉了某因子），
+    # beta 的行号则是 keep_cols 里的**位置**。两者只在「无因子被剔除」时才相等 ——
+    # 原写法 zip(keep_cols, names) 后用 ci 索引 beta 行，一旦中间剔列就越界崩溃
+    # （2026-10-23 修 2026-10-21 因子缺失时触发：index 6 out of bounds for size 6）。
+    _names = ["const", "mkt"] + list(C.FACTORS)
     for dt, info in last_beta.items():
         for i, code in enumerate(codes):
             row = {"date": dt, "ind_code": code}
-            for ci, cname in zip(info["keep_cols"], ["const", "mkt"] + list(C.FACTORS)):
-                row[f"beta_{cname}"] = float(info["beta"][ci, i])
+            for pos, ci in enumerate(info["keep_cols"]):
+                row[f"beta_{_names[ci]}"] = float(info["beta"][pos, i])
             beta_rows.append(row)
     betas = pd.DataFrame(beta_rows)
 

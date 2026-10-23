@@ -92,7 +92,13 @@ ARTIFACTS = {
     #   产物文件由源端删除；此处同步摘登记，否则 --audit-writes 会报「登记了但不存在」。
     "industry_universe":         (DATA_DIR / "industry_universe.parquet", "derived"),
     "ind_crowd_turnover_daily":  (FACTOR_DIR / "ind_crowd_turnover_daily.parquet", "derived"),
-    "industry_margin_daily":     (SIGNALS_DIR / "industry_margin_daily.parquet", "derived"),
+    # 🔴 2026-10-23：改为 retired —— 该产物**已停止生产**（文件停在 2026-09-24），
+    #   `src/signals/sentiment.py:build_panel` 不在十步链内、也无任何生产代码调用它；
+    #   其指标在 docs/indicator-status-register.md 已判「随冷区失效 + 章节已删」。
+    #   保留登记（而非删除）是为了让 --audit-writes 仍认得它、不误报「未登记写入」；
+    #   标 retired 后 check_provenance 不再要求它带复现指纹（派生产物才要求）。
+    #   若日后重新启用，改回 "derived" 并接回日更链即可。
+    "industry_margin_daily":     (SIGNALS_DIR / "industry_margin_daily.parquet", "retired"),
     "signals_log":               (SIGNALS_LOG_PATH, "derived"),
     # ── 链共振测量层（2026-10-07，review §12.2「复现三件套」─ 三件都登记）──
     #   特征 X_{i,k,t} / 因子收益 f_{k,t} / 残差面板 r̃；(链,日) 双输出与探针状态一并登记，

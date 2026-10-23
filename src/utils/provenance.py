@@ -8,8 +8,9 @@
   · 台账行数对不上（如 2234 vs 2204）→ 查不出是哪一次产出造成的。
 
 本模块在落盘时同步写一份 ``<文件名>.meta.json``，记录：
-  produced_at / hostname / producer（生产脚本）/ git（提交 + dirty 标记）/ params /
-  rows / columns / columns_hash / date_range / inputs（输入文件指纹）
+  produced_at / hostname / producer（生产脚本）/ git（提交 + 工作区级 dirty，仅作参考）/
+  producer_state（**该脚本自身**是否未提交 + 脚本内容 sha256）/
+  params / rows / columns / columns_hash / date_range / inputs（输入文件指纹）
 
 设计约束
 --------
@@ -87,6 +88,11 @@ def default_producer() -> str:
 def git_info() -> Dict[str, Any]:
     """当前仓库的提交信息（进程内缓存一次）。
 
+    ⚠️ 这里的 ``dirty`` 是**工作区级**标志（任何已跟踪文件有改动即为真），
+    它描述的是「当前这台机器的工作区状态」，**不是**「这份产物能否由 commit X 复现」。
+    逐产物的归因请用 :func:`producer_state`（2026-10-23 修正：原实现把工作区级
+    dirty 直接当成产物属性，导致 21 个产物里 19 个被错误归因）。
+
     dirty 只看**已跟踪文件**的改动（``--untracked-files=no``）：未跟踪文件不进提交，
     不影响「这份产物能否由 commit X 复现」这个判断，否则研究脚本一多就天天报脏。
     """
@@ -114,6 +120,96 @@ def git_info() -> Dict[str, Any]:
     except Exception as e:                                   # 无 git / 超时 / 权限
         info["error"] = f"{type(e).__name__}: {e}"
     _GIT_CACHE = info
+    return info
+
+
+_PRODUCER_CACHE: Dict[str, Optional[Dict[str, Any]]] = {}
+_SHARED_CACHE: Optional[List[str]] = None
+
+#: 共享代码根：所有脚本都会 import 这里的模块，它们一改，**所有**产物的复现 spec 都变。
+SHARED_CODE_ROOTS = ("src",)
+
+
+def shared_code_dirty() -> List[str]:
+    """共享代码根（默认 ``src/``）下有哪些已跟踪文件未提交（进程内缓存）。
+
+    为什么单列、且**不**逐产物告警
+    ------------------------------
+    共享库一改，确实所有派生结果都不可复现 —— 但这个事实是全局面板级的，
+    它的正确基数（cardinality）是 **1 条**，不是"每个产物各报一条"。
+    逐产物重复 21 遍就是噪声；只报 1 条则既可行动（提交 src/ 即可）又不淹没别的告警。
+    """
+    global _SHARED_CACHE
+    if _SHARED_CACHE is not None:
+        return _SHARED_CACHE
+    out: List[str] = []
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "status", "--porcelain",
+             "--untracked-files=no", "--", *SHARED_CODE_ROOTS],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0:
+            out = [ln[3:].strip() for ln in r.stdout.splitlines() if ln.strip()]
+    except Exception:
+        out = []
+    _SHARED_CACHE = out
+    return out
+
+
+def producer_state(producer: Optional[str]) -> Optional[Dict[str, Any]]:
+    """**产出该产物的脚本本身**有没有未提交改动 + 脚本内容哈希（按脚本缓存）。
+
+    为什么要按脚本判定，而不是用 ``git_info()['dirty']``
+    -----------------------------------------------------
+    原实现把 ``git status`` 的**工作区级**结果写进每个产物的 ``git.dirty``：
+    只要工作区里有**任何一个**文件被改动，所有新产物都被标成「不可复现」。
+    这是**归因错误** —— 「改了 A 脚本」于是 B 脚本的产物也被判脏。
+
+    2026-10-23 实测：21 个 dirty 产物里，19 个的生产脚本一行没改
+    （``build_members_daily.py`` / ``regime_classifier.py`` / ``build_nav_924.py`` …），
+    真正被改的只有 3 个。一个天天为真、且指向错误对象的告警无法行动，
+    最终只能被关掉 —— 当晚就真的被关掉了（PROV_DIRTY 直接不进 issue）。
+    关掉是治标：从此「产物出自未提交代码」这个真风险再也没人看得见。
+    按脚本判定后，dirty 只在**确实改了生产代码**时为真，既稀有又可直接行动。
+
+    判据
+    ----
+    · ``dirty``：``git status --porcelain --untracked-files=no -- <producer>`` 非空。
+    · ``sha256``：脚本文件内容哈希。没有 git（从端 / 沙箱 / 提交后又改回）时，
+      也能比对「产出时用的是哪一版代码」。
+    """
+    if not producer:
+        return None
+    if producer in _PRODUCER_CACHE:
+        return _PRODUCER_CACHE[producer]
+
+    rel = str(producer)
+    info: Dict[str, Any] = {"path": rel, "dirty": None, "sha256": None}
+    p = Path(rel)
+    if not p.is_absolute():
+        p = Path(PROJECT_ROOT) / rel
+    try:
+        if p.is_file():
+            info["sha256"] = "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+        else:
+            info["missing"] = True
+            info["dirty"] = None
+    except Exception as e:
+        info["error"] = f"{type(e).__name__}: {e}"
+
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "status", "--porcelain",
+             "--untracked-files=no", "--", rel],
+            capture_output=True, text=True, timeout=15,
+        )
+        if r.returncode == 0:
+            info["dirty"] = bool(r.stdout.strip())
+    except Exception as e:
+        info.setdefault("error", f"{type(e).__name__}: {e}")
+
+    _PRODUCER_CACHE[producer] = info
     return info
 
 
@@ -222,6 +318,7 @@ def build_meta(
         "hostname": socket.gethostname(),
         "producer": producer or default_producer(),
         "git": git_info(),
+        "producer_state": producer_state(producer or default_producer()),
         "target": relative_to_known_roots(logical if logical is not None else target),
         "rows": rows,
         "columns": list(columns) if columns is not None else None,

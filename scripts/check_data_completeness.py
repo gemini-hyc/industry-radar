@@ -35,7 +35,8 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.paths import (MARKET_DIR, BASIC_DIR, INDUSTRY_DIR, DATA_DIR,
                        ARTIFACTS, DERIVED_DIRS)
-from src.utils.provenance import load_meta, git_info, sidecar_path, save_json, SIDECAR_SUFFIX
+from src.utils.provenance import (load_meta, git_info, sidecar_path, save_json,
+                                 shared_code_dirty, SIDECAR_SUFFIX)
 
 ADJ_DIR = DATA_DIR / "adj_factor"
 LIMIT_DIR = DATA_DIR / "stk_limit"
@@ -136,6 +137,71 @@ MAX_ADJ_DIRTY = 0.001    # market/daily 中「非分币精度」占比上限（�
 BASIC_MIN_COLS = 18      # daily_basic 最少列数（曾有 240 天只有 4 列）
 MIN_ADJ_COVERAGE = 0.99  # adj_factor 对 market/daily 股票的覆盖率下限
 
+# ── 列级非空覆盖下限（防「行齐列空」）──
+# 2026-10-21 事故：daily_basic 当日 **5568 行、18+ 列，但 pb / pe_ttm 两列 0 非空**。
+# 行数、列数、文件时间戳全部正常 ⇒ 既有检查一路放行 ⇒ 坏文件入库 ⇒
+# value 因子当日 NaN ⇒ residualize 的 A1[t] 一个 NaN 把 131 个行业的 adj 全灭 ⇒
+# rolling_corr 的 250 日窗把 NaN 传染 60+ 个交易日。**没有任何一处报错**。
+# 结论：只查「文件在不在 / 行数 / 列数」永远抓不到这一类，必须查**每列的非空率**。
+#
+# 阈值口径（写死前先跑稳态基线，2026-10-23 取近 60 个交易日实测最小值）：
+#     daily_basic  pb 0.990 / pe_ttm 0.705 / total_mv 1.000 / circ_mv 1.000 / dv_ratio 0.675
+#     market/daily close 1.000 / volume 1.000 / amount 1.000
+#     adj_factor   adj_factor 1.000
+# 阈值取「基线最小值再留 5~10pct 余量」，保证健康日 **0 触发**。
+# ⚠️ 新增监控规则必须先跑一遍稳态基线再上线 —— hk_hold 与 PROV_DIRTY 两条永久红灯
+#    都是跳过了这一步（假设了"当日可取"、"工作区不脏"而没验证）。
+COL_COVERAGE_MIN = {
+    "market/daily": {"close": 0.98, "volume": 0.98, "amount": 0.98},
+    "daily_basic": {"pb": 0.90, "pe_ttm": 0.60,
+                    "total_mv": 0.95, "circ_mv": 0.95, "dv_ratio": 0.55},
+    "adj_factor": {"adj_factor": 0.98},
+}
+
+
+def _col_coverage(p, cols):
+    """读 parquet → {列: 非空率}，并返回缺失列集合（只读需要的列，避免整表加载）。"""
+    import pyarrow.parquet as pq
+    have = set(pq.ParquetFile(p).schema.names)
+    use = [c for c in cols if c in have]
+    if not use:
+        return {}, set(cols)
+    df = pd.read_parquet(p, columns=use)
+    return {c: float(df[c].notna().mean()) for c in use}, set(cols) - have
+
+
+def check_col_coverage(t: pd.Timestamp):
+    """1b-2. 列级非空覆盖 —— 堵「行齐列空」。见 COL_COVERAGE_MIN 的说明。"""
+    out, stats = [], {}
+    for ds, expect in COL_COVERAGE_MIN.items():
+        p = DATA_DIR / ds / f"{t:%Y-%m-%d}.parquet"
+        if not p.exists():
+            continue          # 文件缺失由 check_sources 负责，这里不重复报
+        try:
+            cov, absent = _col_coverage(p, expect)
+        except Exception as e:
+            out.append(issue(WARNING, "COL_PROBE_FAIL",
+                             f"{ds} 列覆盖检查异常: {e}", date=str(t.date())))
+            continue
+        stats[ds] = {k: round(v, 4) for k, v in cov.items()}
+        if absent:
+            out.append(issue(
+                WARNING, "COL_ABSENT",
+                f"{ds} 缺列 {sorted(absent)}（口径变更或抓取漏字段）",
+                fix="核对抓取脚本列清单；口径变更须同步 docs/DATA_CONTRACT",
+                date=str(t.date()), dataset=ds, absent=sorted(absent)))
+        for c, got in cov.items():
+            need = expect[c]
+            if got < need:
+                out.append(issue(
+                    CRITICAL, "COL_EMPTY",
+                    f"{ds}.{c} 当日非空率 {got:.1%} < {need:.0%}"
+                    f"（行齐列空：行数正常但该列基本无值，下游因子会当日失效）",
+                    fix=f"重下 {ds}/{t:%Y-%m-%d}.parquet（fetch_daily.py 已加列覆盖门禁，"
+                        f"不达标拒盘）；若为源端问题，确认 Tushare 该字段当日是否有值",
+                    date=str(t.date()), dataset=ds, column=c, coverage=round(got, 4)))
+    return out, stats
+
 
 def check_hygiene(t: pd.Timestamp):
     """1b. 值分布与列结构 —— 堵住「文件都在、数据悄悄不对」的静默问题。
@@ -210,8 +276,15 @@ def check_hygiene(t: pd.Timestamp):
 # ── 情绪数据（批次2，2026-09-24 接入）──
 SENTI_DIR = DATA_DIR / "sentiment"
 SENTI_DAILY = SENTI_DIR / "sentiment_daily.parquet"
-# 这五个当日 18:30 即可取到；margin_detail 是 T+1 发布，只能等次日
-SENTI_SAME_DAY = ["top_list", "top_inst", "block_trade", "hsgt_top10", "hk_hold"]
+# 这四个当日 18:30 即可取到（2026-10-23 实测：22:02 查当日均有行）
+SENTI_SAME_DAY = ["top_list", "top_inst", "block_trade", "hsgt_top10"]
+# hk_hold（沪深港通持股，2024-08-19 后只剩港股通 exchange=HK）实测是 **T+1 就绪**：
+#   · 2026-10-23 22:02 实测：查 20261023 → 0 行；查 20261022 → 1017 行
+#   · 本地最近 60 个文件 (写入日 − 数据日) 最小滞后就是 **1 天**，从未出现 0 天
+# 原先把它误列入 SENTI_SAME_DAY，导致每晚都因「缺当日文件」报 CRITICAL ——
+# 2026-10-12 ~ 10-23 连续 11 个交易日误报，把真告警彻底淹掉了（狼来了）。
+# 港股休市日 fetch_sentiment 会落「空文件」，故这里只查文件在不在、不查行数。
+SENTI_T1 = ["hk_hold"]
 MARGIN_BAL_RANGE = (0.3e12, 6e12)   # 两融余额合理区间（元）
 BLOCK_AMT_RANGE_YI = (5.0, 200.0)   # 大宗成交额日中位数合理区间（亿元，A股口径）
 
@@ -252,8 +325,21 @@ def check_sentiment(t: pd.Timestamp):
         elif nrows(p) == 0:
             stats[f"{name}_empty"] = True   # 空值合法性由 check_sentiment.py 判定
 
-    # 两融：T+1（margin_detail 明细 + margin_summary 官方汇总，同源同发布节奏）
+    # hk_hold：T+1 就绪，查前一交易日即可（港股休市日由 fetch_sentiment 落空文件）
     pt = prev_trade_day(t)
+    for name in SENTI_T1:
+        hp = SENTI_DIR / name / f"{pt:%Y-%m-%d}.parquet"
+        if not hp.exists():
+            out.append(issue(
+                WARNING, "SENTI_LAG",
+                f"{name} 缺 {pt:%Y-%m-%d}（该接口 T+1 就绪，实际滞后 2 日以上）",
+                fix="跑 fetch_sentiment.py --days 7 自愈；"
+                    "若持续缺失，确认同花顺/港交所当日是否休市",
+                date=str(t.date())))
+        elif nrows(hp) == 0:
+            stats[f"{name}_empty"] = True   # 港股休市日合法为空
+
+    # 两融：T+1（margin_detail 明细 + margin_summary 官方汇总，同源同发布节奏）
     for nm in ("margin_detail", "margin_summary"):
         mp = SENTI_DIR / nm / f"{pt:%Y-%m-%d}.parquet"
         if not mp.exists() or nrows(mp) == 0:
@@ -629,47 +715,90 @@ def check_style_probe(t: pd.Timestamp):
 
 
 # ─────────────────────── 产物指纹（provenance）───────────────────────
+#: 自指排除：监控脚本**自己写**的状态快照不进 producer-dirty 判定。
+#: 否则链条是「改监控脚本 → 它自己产出的状态文件脏 → 监控报自己脏」，
+#: 于是只要还在调监控就永久红灯 —— 正是本函数要治的那种病。
+#: 它是运行状态快照（每次运行重写），不是数据产物，不承担复现语义。
+PROV_SELF_EXCLUDE = {"scripts/check_data_completeness.py"}
+
+
 def check_provenance():
-    """6. 已登记产物是否带 <文件名>.meta.json 指纹。
+    """6. 已登记产物是否带 <文件名>.meta.json 指纹，且**生产脚本本身**可复现。
 
     判定规则（对应 src/paths.py:ARTIFACTS 登记表，唯一真相来源）：
-      · 产物存在但缺指纹   → WARNING（接入指纹前的存量，或由未登记的写入方产出）
-      · 指纹记录了 dirty   → WARNING（产物出自未提交的工作区代码，不可复现）
-      · 指纹 commit ≠ HEAD → **只进 summary 不做告警**：每次提交都会让存量产物「漂移」，
-                             升级成 issue 会天天误报；它作为可见信息供人工判断。
+      · **derived** 产物存在但缺指纹 → WARNING：计算结果的复现 spec（params/窗口/因子集）
+        丢了，以后无法说明「这个数是怎么算出来的」，属真缺陷。
+      · **fetched** 产物**不查指纹**：它是数据源快照而非计算结果，本身没有算法参数可复现
+        —— 重下即得（且源端早已变化）。要求它带复现指纹没有意义，只会制造永久告警。
+      · **PROV_PRODUCER_DIRTY** → WARNING：产物带指纹，但**产出它的那个脚本本身**
+        有未提交改动（判据来自 meta.producer_state，逐脚本归因）。这是真风险
+        —— 产物无法由任何 commit 复现，且脚本随时可能被下一次改动覆盖。
+        可行动：提交该脚本后重跑（或明确接受"这就是当天的临场修复"）。
+      · `commit≠HEAD` → 只进 summary：每次提交都会让存量产物漂移，属正常信息。
+
+    🔴 2026-10-23 修正（原实现的两个错误，勿回退）
+    -------------------------------------------------
+    1. **归因错**：原先把 `git status` 的**工作区级** dirty 当成产物属性，只要工作区
+       有任何改动，全部新产物都被判「不可复现」。实测 21 个 dirty 产物里，只有 2 个的生产
+       脚本真的被改过 —— 其余 19 个是归因错误（生产脚本一行没动）。
+       → 改为读 meta.producer_state（逐脚本 git status + 脚本 sha256）。
+    2. **处置错**：当晚为了消掉这条"天天为真"的告警，把它整条降级成"只进 summary"。
+       那是**治标** —— 把报警器关掉不等于修好管道：从此「产物出自未提交代码」这个
+       真风险彻底不可见。正确处置是修归因，让它在**真脏**时才响（现在就是）。
+       当晚的错误论证也一并记下：曾用「它没抓到 daily_basic 行齐列空」来否定它 ——
+       这是**范畴错误**，provenance 查的是"数怎么算出来的"，不查"数值对不对"。
+       数值类故障归 check_hygiene 的列级覆盖与 check_style_probe，各司其职。
     """
     head = (git_info() or {}).get("commit")
-    out, missing, dirty, ok, stale = [], [], [], [], []
-    for name, (path, _kind) in sorted(ARTIFACTS.items()):
+    out, missing, dirty, ok, stale, legacy = [], [], [], [], [], []
+    for name, (path, kind) in sorted(ARTIFACTS.items()):
         if not Path(path).exists():
             continue
         meta = load_meta(path)
         if meta is None:
-            missing.append(name)
+            if kind == "derived":
+                missing.append(name)
             continue
         ok.append(name)
-        git = meta.get("git") or {}
-        if git.get("dirty"):
-            dirty.append(name)
-        if git.get("commit") and head and git["commit"] != head:
+        ps = meta.get("producer_state")
+        if isinstance(ps, dict) and ps.get("dirty") \
+                and ps.get("path") not in PROV_SELF_EXCLUDE:
+            dirty.append(f"{name}←{ps.get('path')}")
+        elif not ps:
+            # 接入 producer_state 之前的存量指纹：只有工作区级 dirty，无法归因
+            if (meta.get("git") or {}).get("dirty"):
+                legacy.append(name)
+        if (meta.get("git") or {}).get("commit") and head \
+                and meta["git"]["commit"] != head:
             stale.append(name)
 
     if missing:
         out.append(issue(
             WARNING, "PROV_MISSING",
-            f"{len(missing)} 个已登记产物缺指纹(.meta.json): {', '.join(missing)}",
-            fix="多为接入指纹前的存量产物 —— 重跑对应脚本即可补齐；"
-                "若重跑后仍缺，说明该产物由未登记的写入方产出，请登记到 src/paths.py:ARTIFACTS",
+            f"{len(missing)} 个**派生**产物缺指纹(.meta.json): {', '.join(missing)}",
+            fix="重跑对应脚本即可补齐（派生产物应走 src/utils/provenance:save_dataframe）；"
+                "若重跑后仍缺，说明该产物由未登记的写入方产出，请确认它是否应登记为 fetched",
             artifacts=missing))
     if dirty:
         out.append(issue(
-            WARNING, "PROV_DIRTY",
-            f"{len(dirty)} 个产物出自**未提交**的工作区代码（不可复现）: {', '.join(dirty)}",
-            fix="提交改动后重跑对应脚本，指纹才会指向一个可复现的提交",
+            WARNING, "PROV_PRODUCER_DIRTY",
+            f"{len(dirty)} 个产物的**生产脚本本身**有未提交改动（产物不可由 commit 复现）: "
+            f"{', '.join(dirty)}",
+            fix="提交对应脚本后重跑该步；若属当日临场修复，请在提交信息里写明并接受该产物作废重跑",
             artifacts=dirty))
+    src_bad = shared_code_dirty()
+    if src_bad:
+        out.append(issue(
+            WARNING, "PROV_SRC_DIRTY",
+            f"共享库 src/ 有 {len(src_bad)} 个已跟踪文件未提交（{', '.join(src_bad[:6])}"
+            f"{' …' if len(src_bad) > 6 else ''}） ⇒ **所有**派生结果的复现 spec 都受影响",
+            fix="提交 src/ 改动（共享库一改，逐产物归因就不再必要 —— 这是全局面板级问题，只报一条）",
+            paths=src_bad))
 
     stats = {"checked": len(ok) + len(missing), "with_meta": len(ok),
-             "missing": len(missing), "dirty": len(dirty),
+             "missing": len(missing), "producer_dirty": len(dirty),
+             "shared_code_dirty": len(src_bad),
+             "legacy_unattributed": len(legacy),
              "code_drift": stale, "current_commit": head}
     return out, stats
 
@@ -725,6 +854,93 @@ def print_audit_report(groups: dict, samples: int = 6):
     print("        ② 属原料/外部抓取的 → 按 fetched 登记；③ 属历史遗留的 → 归档到 _archive/。")
 
 
+# ─────────────────── 告警台账（防「永久红灯」）───────────────────
+# 为什么需要它：本项目已经出过两次同类事故 ——
+#   ① hk_hold 被当"当日可取"，实际 T+1 就绪（1647/1647 个文件全部滞后 ≥1 天），
+#      规则**结构上不可满足** ⇒ 连续 11 个交易日 CRITICAL ⇒ 真告警被彻底淹掉；
+#   ② PROV_DIRTY 取工作区级 dirty，21 个产物里 19 个归因错误 ⇒ 天天为真 ⇒ 被关掉。
+# 两次的处置都只动了"单条规则"，没动"为什么会存在一条永久为真的规则"。
+# 治本的做法是让**规则自身可被审计**：记录每次运行的 issue 码，定期看触发率，
+# ≥80% 的规则一律按"设计缺陷"复核（口径写错 / 归因错 / 不可行动），而不是继续调参。
+HISTORY_PATH = INDUSTRY_DIR / "completeness_history.jsonl"
+ALARM_BUDGET_WINDOW = 20
+ALARM_BUDGET_RED = 0.80     # 触发率 ≥80% ⇒ 疑似永久红灯（设计缺陷）
+ALARM_BUDGET_AMBER = 0.30   # 30%~80% ⇒ 需要盯
+ALARM_BUDGET_MIN_RUNS = 5   # 少于 5 次不下判定（1 次运行 100% 说明不了任何事）
+
+
+def _append_history(report: dict) -> None:
+    """追加一行运行历史（同一 target_date 相同结论只记一次，保留当天最后状态）。"""
+    codes = sorted([[i.get("level"), i.get("code")] for i in report.get("issues", [])])
+    rec = {"ts": report.get("checked_at"), "target_date": report.get("target_date"),
+           "exit_code": report.get("exit_code"), "status": report.get("status"),
+           "codes": codes}
+    try:
+        if HISTORY_PATH.exists():
+            lines = HISTORY_PATH.read_text(encoding="utf-8").strip().splitlines()
+            if lines:
+                prev = json.loads(lines[-1])
+                if (prev.get("target_date") == rec["target_date"]
+                        and prev.get("exit_code") == rec["exit_code"]
+                        and prev.get("codes") == codes):
+                    return
+        with open(HISTORY_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"⚠️ 告警历史写入失败（不影响检查结论）: {e}")
+
+
+def print_alarm_budget(window: int = ALARM_BUDGET_WINDOW) -> None:
+    """每条规则最近 N 次运行的触发率 + 判定。读的是 completeness_history.jsonl。"""
+    if not HISTORY_PATH.exists():
+        print(f"（无历史台账：{HISTORY_PATH}；先正常跑一次 check_data_completeness.py）")
+        return
+    recs = []
+    for ln in HISTORY_PATH.read_text(encoding="utf-8").splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            recs.append(json.loads(ln))
+        except Exception:
+            continue
+    recs = recs[-window:]
+    n = len(recs)
+    if not n:
+        print("（历史台账为空）")
+        return
+    hit: dict = {}
+    for r in recs:
+        for lv, code in r.get("codes") or []:
+            key = (lv, code)
+            hit[key] = hit.get(key, 0) + 1
+    print(f"告警触发率台账（最近 {n} 次运行 {recs[0].get('target_date')} → "
+          f"{recs[-1].get('target_date')}）")
+    print(f"{'触发率':>7}  {'次数':>5}  判定        规则")
+    print("-" * 72)
+    for (lv, code), c in sorted(hit.items(), key=lambda kv: -kv[1]):
+        rate = c / n
+        if n < ALARM_BUDGET_MIN_RUNS:
+            verdict = "… 样本不足"
+        elif rate >= ALARM_BUDGET_RED:
+            verdict = "🔴 设计缺陷嫌疑"
+        elif rate >= ALARM_BUDGET_AMBER:
+            verdict = "🟠 需盯"
+        else:
+            verdict = "🟢 偶发"
+        print(f"{rate:>6.0%}  {c:>5}  {verdict:<12} {lv}/{code}")
+    if n < ALARM_BUDGET_MIN_RUNS:
+        print(f"\n（样本 {n} 次 < {ALARM_BUDGET_MIN_RUNS} 次，暂不下判定）")
+        return
+    red = [k for k, c in hit.items() if c / n >= ALARM_BUDGET_RED]
+    if red:
+        print("\n⚠️ 上面标 🔴 的规则：请先复核**口径/归因是否正确**，不要先降级或加白名单。"
+              "\n   本项目两次永久红灯（hk_hold 当日假设、PROV_DIRTY 全局 dirty）"
+              "都是这么来的。")
+    else:
+        print("\n✅ 无永久红灯嫌疑。")
+
+
 def main():
     ap = argparse.ArgumentParser(description="行业数据日更完备性监控")
     ap.add_argument("--date", default=None, help="目标交易日 YYYY-MM-DD，默认取最新行情日")
@@ -733,10 +949,17 @@ def main():
     ap.add_argument("--no-write", action="store_true", help="不写状态文件")
     ap.add_argument("--audit-writes", action="store_true",
                     help="审计派生目录里的未登记写入（人工用，不参与退出码）")
+    ap.add_argument("--alarm-budget", nargs="?", type=int, const=ALARM_BUDGET_WINDOW,
+                    default=None,
+                    help="统计最近 N 次运行里每条规则的触发率，识别「永久红灯」（人工用）")
     args = ap.parse_args()
 
     if args.audit_writes:
         print_audit_report(audit_unregistered_writes())
+        sys.exit(0)
+
+    if args.alarm_budget is not None:
+        print_alarm_budget(args.alarm_budget)
         sys.exit(0)
 
     t, src = resolve_target_date(args.date)
@@ -754,6 +977,7 @@ def main():
                           extra={"status": report.get("status")})
             except Exception as e:
                 print(f"⚠️ 状态文件写入失败: {e}")
+            _append_history(report)
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
@@ -780,6 +1004,9 @@ def main():
     hy_issues, hy_stats = check_hygiene(t)
     issues += hy_issues
     report["summary"]["hygiene"] = hy_stats
+    cc_issues, cc_stats = check_col_coverage(t)
+    issues += cc_issues
+    report["summary"]["col_coverage"] = cc_stats
     se_issues, se_stats = check_sentiment(t)
     issues += se_issues
     report["summary"]["sentiment"] = se_stats
@@ -877,7 +1104,8 @@ def print_report(report: dict, msg: str = ""):
                 if pv.get("current_commit"):
                     extra_txt += f"  当前提交 {pv['current_commit']}"
                 print(f"  产物指纹  : {pv.get('with_meta', 0)}/{pv.get('checked', 0)} 有指纹"
-                      f"（缺 {pv.get('missing', 0)}，脏 {pv.get('dirty', 0)}）{extra_txt}")
+                      f"（缺 {pv.get('missing', 0)}，脚本脏 {pv.get('producer_dirty', 0)}，"
+                      f"src脏 {pv.get('shared_code_dirty', 0)}）{extra_txt}")
     if report["issues"]:
         print()
         for it in report["issues"]:

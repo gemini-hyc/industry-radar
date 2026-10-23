@@ -45,6 +45,7 @@ warnings.filterwarnings('ignore')
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 from src.paths import INDUSTRY_DIR  # noqa: E402
+from src.utils.provenance import save_dataframe  # noqa: E402
 
 # 方案 C 的筛选依据：74 链否决权验证结果（项目 A 产物，2026-10-11）。
 # 🔴 已从 _local_dev 固化进仓库 —— 生产链不得依赖沙箱文件（可能被清理）。
@@ -319,8 +320,19 @@ def main() -> None:
     # ⚠️ 观察期台账请用 research/observation_snapshot.py —— 它按「参考日」记账，
     #    不会因为本文件被覆盖而丢失历史对照。
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    results.to_csv(out_path, index=False)
-    print(f"\n结果已保存到 {out_path}")
+    # 走 save_dataframe 而非裸 to_csv：派生产物必须留复现 spec（否则
+    # check_data_completeness 的 PROV_MISSING 会一直报「派生结果无法说明怎么算出来的」）。
+    saved = save_dataframe(
+        results, out_path,
+        producer="scripts/chain_mainline_detector.py",
+        params={"n_chains": int(len(results)),
+                "with_mainline": int(results["is_mainline"].sum())
+                if "is_mainline" in results.columns else None,
+                "resonance_source": "industry/chain_resonance_daily.csv",
+                "prior": PRIOR_CSV.name, "veto": VETO_CSV.name},
+        extra={"artifact_role": "chain_mainline"},
+    )
+    print(f"\n结果已保存到 {saved}")
 
 
 if __name__ == '__main__':
