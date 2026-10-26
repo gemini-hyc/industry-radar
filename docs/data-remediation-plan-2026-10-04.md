@@ -223,7 +223,11 @@ python3 scripts/evaluate_signals.py
 > ✅ **B5 已部分完成**（2026-10-04 A9）：`requirements.txt` 头注释已写明**源端 / 本机 / 新机器三种解释器情形**。
 > 源端只需**核对并按实情微调**（见 §3.2）。
 > ⚠️ 本机已实测：`/usr/bin/python3` **没有 pandas**；真实解释器在 `stock-doctor/.venv`。
-> ⚠️ **另有一处 README 内部矛盾待源端确认**：`:58` 说上游数据 **16:16** 更新、`:76` 说 **18:30** 才开始拉 —— 属调度口径。
+> ✅ **已澄清（2026-10-26）**：两处口径是**不同任务**，不是矛盾——
+> `market/daily` + `daily_basic` 由 `com.stock-doctor.daily-fetch-early` 在**交易日 16:20** 产出；
+> `com.stock-doctor.daily-update` 在**每天 18:30** 用 `--days 7` 自愈窗口做二次补齐（补漏跑日、刷新交易日历与指数日线）。
+> 另有 `com.stock-doctor.evening-topup` 在**交易日 21:30** 抓情绪/北向等源端晚间才发布的数据。
+> README 已按此改写（原文写作「openclaw 16:16」，实为早期系统的任务名，已不存在）。
 
 ---
 

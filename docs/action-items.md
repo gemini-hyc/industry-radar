@@ -93,7 +93,7 @@ python3 scripts/evaluate_signals.py
 |:--:|:--:|---|---|
 | B1 | `[ ]` | **确认源端在跑的代码版本**：对比关键文件 mtime / 行数 / md5 与本机这份 | 本机文件 mtime 统一为 2026-09-24，**无法确定源端是否同一版本**；不一致则 A1~A3 的同步可能是"用旧的覆盖新的" |
 | B2 | `[ ]` | **建立代码到源端的同步通道**（git 推送 / rsync 脚本 / 手动拷贝均可，但要固化） | 目前 `~/.quant-sync` 只同步 `quant-data` **数据**，**不含代码**；本机改动没有任何机制到源端 |
-| B3 | `[ ]` | 确认 `com.industry-radar.daily.plist` 的真实位置 | README 让用户 `launchctl bootstrap` 这个 plist，但**仓库内与本机 LaunchAgents 里都不存在** —— 文档照做会失败。需查清源端实际用什么调度 |
+| B3 | `[x]` | ~~确认 `com.industry-radar.daily.plist` 的真实位置~~ | ✅ **已确认（2026-10-26）**：在 `~/Library/LaunchAgents/com.industry-radar.daily.plist`（仓库内不放 plist 是设计如此）。该 LaunchAgent 确曾加载运行（累计 24 次）。注：**2026-10-26 已 `launchctl bootout` 卸载**，plist 保留，恢复用 `bootstrap`。 |
 | B4 | `[ ]` | 修正路径大小写：`~/quant/industry-radar` → `~/Quant/industry-radar` | README 与 `cron/industry_review_daily.py` 回退路径写的是小写；macOS 不敏感所以能跑，跨到大小写敏感卷会挂 |
 | B5 | `[ ]` | 记录源端 Python 解释器与依赖版本（`python3 -V`、`pip freeze`） | 本机 `/usr/bin/python3` **没有 pandas**，两边环境必然不同；出问题时需要这个基线 |
 

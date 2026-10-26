@@ -30,7 +30,7 @@
 ### 1.2 当前真实链路
 
 ```
-[外部] openclaw tushare-daily-fetch 16:16 → market/daily + daily_basic
+[外部] launchd com.stock-doctor.daily-fetch-early 16:20 → market/daily + daily_basic
         │
         ├─ scripts/build_members_daily.py        每日成分快照（PIT，必须每日跑）
         ├─ scripts/compute_weighted_returns.py   circ_mv 加权涨跌幅（按日 upsert）
@@ -51,7 +51,12 @@
   signals/signals_log.parquet + signals/eval_YYYYMMDD.md
 ```
 
-**调度**：launchd `com.industry-radar.daily` 于每日 19:30 / 20:00 / 20:30 / 21:00 各触发一次，幂等标记 `logs/.scheduled_done_YYYY-MM-DD`（跑通即停；数据未到就等下一次；21:00 仍未到则系统通知）。入口 `scripts/run_daily_scheduled.sh`。
+**调度**：launchd `com.industry-radar.daily` 于**交易日 22:00 / 22:30 / 23:00** 各触发一次，幂等标记 `logs/.scheduled_done_YYYY-MM-DD`（跑通即停；数据未到就等下一次；到最后一档仍无数据则系统通知）。入口 `scripts/run_daily_scheduled.sh`。
+
+> **2026-10-26 更正**（本节原写「19:30 / 20:00 / 20:30 / 21:00 四档、21:00 判最后一档」，均已过时）：
+> - ① 2026-10-19 起三档整体后移到 22:00/22:30/23:00——上游情绪/北向由 `com.stock-doctor.evening-topup` 在 21:30 才开抓（实测 21:31~21:40 完成），原来的四档全都早于它，等于每天必留 5 条 `SENTI_MISSING` 假告警。
+> - ② `run_daily_scheduled.sh` 曾写死「≥21:00 即最后一档」，与 plist 脱节，导致第一档就误报。现已改为**直接读 plist 的 `StartCalendarInterval`** 取最晚一档（解析失败回落 23:00）⇒ 日后改时间只改 plist。
+> - ③ **2026-10-26 该任务已被 `launchctl bootout` 卸载（plist 保留），当前不自动运行**；恢复见 `README.md`「定时自动（launchd）」。
 
 ### 1.3 关键文件 → 真相来源对照
 

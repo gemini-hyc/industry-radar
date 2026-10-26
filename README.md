@@ -1,6 +1,6 @@
 # Industry Radar — 行业分析链路
 
-从 Hermes Quant（`~/.hermes/quant`）抽取的完整行业分析链路，独立演进。
+独立的行业分析链路：2026-09 自早期系统抽取后**完全自持演进**（代码 / 数据 / 调度均不依赖旧系统）。
 定位：行业板块的数据拉取 → 因子计算 → 反转跟踪 → 主线择时 → 每日行业复盘报告 → 富途分组同步。
 
 > **接手必读**：[`docs/system-audit-and-roadmap.md`](docs/system-audit-and-roadmap.md) —— 系统问题审计与改造路线（2026-09-23）。
@@ -17,7 +17,7 @@
 ## 链路全景
 
 ```
-富途OpenD(localhost:11111)                      Tushare fetch（openclaw 16:16，已存在）
+富途OpenD(localhost:11111)                      Tushare fetch（stock-doctor 16:20，已存在）
       │ 拉取行业列表+成员                               │ market/daily + daily_basic
       ▼                                               ▼
 scripts/pull_futu_industry.py              /Users/hyc/quant-data/  ← 共享数据根
@@ -100,7 +100,7 @@ make help       # 列出全部目标
 
 - **单一配置源**：`config/config.yaml`，可用环境变量 `INDUSTRY_RADAR_DATA` 覆盖数据根目录，默认 `/Users/hyc/quant-data`
 - 数据读写全部经 `src/paths.py`，**禁止**硬编码 `/opt/data` 容器路径
-- 输入：`market/daily/*.parquet`、`daily_basic/*.parquet`（由现有 openclaw tushare-daily-fetch 任务每日 16:16 更新，本项目不重复拉取）
+- 输入：`market/daily/*.parquet`、`daily_basic/*.parquet`（由 **同机 launchd 任务 `com.stock-doctor.daily-fetch-early`** 每交易日 16:20 更新，本项目不重复拉取；18:30 的 `daily-update` 做二次补齐。⚠️ 旧文档写的「openclaw 16:16」已过时）
 - 输出：`industry/*.parquet`、`factors/ind_crowd_turnover_daily.parquet`、`reports/daily-analysis/*.md`、`signals/signals_log.parquet`（信号台账）、`signals/eval_*.md`（评估报告）、`signals/industry_margin_daily.parquet`（两融占比面板缓存，**2026-10-06 起不再对外呈现**）
 - ⚠️ `industry/tracker_state.json` **2026-10-06 起不再产出**（反转跟踪系统已删除）；`scripts/sync_industries_to_futu.py`（人工同步入口，主人拍板保留）仍读该文件 ⇒ 该脚本目前**无输入可用**，恢复需先重建跟踪池
 
@@ -108,19 +108,26 @@ make help       # 列出全部目标
 
 ### 定时自动（launchd）
 
-`com.industry-radar.daily` 每日 **19:30 / 20:00 / 20:30 / 21:00** 各触发一次，跑通即停：
+> ⚠️ **当前状态（2026-10-26）：已卸载，不自动运行。**
+> `com.industry-radar.daily` 已用 `launchctl bootout` 停用，plist 保留未删。
+> 需要恢复自动化时执行下面的 `bootstrap` 即可，无需改代码。
+
+`com.industry-radar.daily` 每交易日 **22:00 / 22:30 / 23:00** 各触发一次，跑通即停：
 
 ```bash
 # 一次性加载（首次部署；之后开机 / 登录会自动生效）
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.industry-radar.daily.plist
 launchctl print gui/$(id -u)/com.industry-radar.daily      # 查看状态
-launchctl bootout gui/$(id -u)/com.industry-radar.daily    # 取消
+launchctl bootout gui/$(id -u)/com.industry-radar.daily    # 取消（只卸载，plist 保留）
 ```
 
 设计要点：
 
-- 上游数据 18:30 才开始拉取，故从 19:30 起跑；**多次触发 + 幂等标记**（`logs/.scheduled_done_YYYY-MM-DD`）实现「数据没到就等下一次」，跑通即不再重复。
-- 非交易日直接跳过；数据到 21:00 仍未落地 → 发系统通知告警。
+- **触发时刻的唯一来源是 plist 的 `StartCalendarInterval`**，`run_daily_scheduled.sh` 会直接读它来判断「这是不是当日最后一档」。改时间只改 plist，**不要**再往脚本里写死时刻。
+  - 曾因此踩坑：plist 从 `19:30/20:00/20:30/21:00` 后移到 `22:00/22:30/23:00` 后，脚本仍按 `≥21:00` 判断，导致第一档 22:00 就误报「已达当日最后一次触发」。2026-10-26 已改为读 plist（解析失败回落 `23:00`）。
+- 为什么从 22:00 起而不是更早：情绪/北向那批上游由 `com.stock-doctor.evening-topup` 在 **21:30** 才开抓，实测 21:31~21:40 完成。提前跑只会每天留下 5 条 `SENTI_MISSING` 告警，把真信号变噪音。
+- **多次触发 + 幂等标记**（`logs/.scheduled_done_YYYY-MM-DD`）实现「数据没到就等下一次」，跑通即不再重复。
+- 非交易日直接跳过；到最后一档（23:00）行情/市值仍未落地 → 发系统通知告警（此时才是上游真的失败）。已知上游失败原因之一是 `api.waditu.com` **DNS 解析失败**，2026-10-26 即因此当日无数据。
 - 失败 / 有警告 → macOS 系统通知；日志见 `logs/scheduled_*.log` 与 `~/quant-data/logs/industry-radar-scheduled.log`。
 - 不依赖 launchd 的手动入口：`bash scripts/run_daily_scheduled.sh`
 
@@ -178,7 +185,7 @@ python3 scripts/sync_industries_to_futu.py             # 手动：行业分组�
 退出码：`0` 健康 / `1` 严重 / `2` 警告 / `3` 非交易日跳过（结果落盘 `industry/completeness_status.json`）。
 cron 入口检测到 `1` 会以非零码退出，避免缺数被静默吞掉。
 
-## 口径备忘（继承自 Hermes，详见 docs/）
+## 口径备忘（详见 docs/）
 
 - 行业划分：富途 Plate.INDUSTRY（申万二级近似），约定 131 个行业；名称与申万2021 二级 131/131 匹配。
   注：早期交易日（申万分类演化期）实际只有 127 个行业有成分，属正常，**不是缺数**
@@ -223,11 +230,11 @@ research/     历史回测脚本存档（冻结，不维护）
 docs/         设计文档与回测结论存档
 ```
 
-## 与 Hermes 的关系
+## 沿革（已完全解耦）
 
-- 代码抽取自 `~/.hermes/quant`（v0 基线 commit 与源逐字节一致）
-- **Hermes 侧已于 2026-09-24 退出 git 仓库状态**：`.git` 已移除，工作树文件原样保留（6068 个文件未动）。
-  全部历史（`master` / 9 个提交）归档在 `~/.hermes/quant-git-backup-20260924.tar.gz`，
-  提交清单见 `~/.hermes/quant-git-log-20260924.txt`；需要逐字节 diff 追溯时解包该备份即可
-- Hermes 侧原文件暂不删除；切换调度前旧链路保持运行
-- 本仓库是行业链路的唯一演进方向，后续修改完善在此进行
+- 本系统 2026-09 自早期系统抽取后独立演进，**代码 / 数据 / 调度均不依赖任何外部旧系统**：
+  数据统一走 `~/quant-data`（可用 `INDUSTRY_RADAR_DATA` 覆盖），日更调度走 launchd
+  `com.industry-radar.daily`（**2026-10-26 起已卸载，见「定时自动」一节的当前状态**），
+  解释器为 `/usr/bin/python3`。
+- 早期系统的历史与追溯记录留在 `docs/` 的日期化文档中；本仓库不再引用其任何路径。
+- 本仓库是行业链路的唯一演进方向，后续修改完善在此进行。
