@@ -88,7 +88,7 @@ main() {
     ls "$MARKET_DIR"/*.parquet >/dev/null 2>&1 \
         || { echo "❌ 行情目录无数据: $MARKET_DIR"; exit 1; }
 
-    # 取最新交易日（自动适应周末/节假日/16:16 前运行）
+    # 取最新交易日（自动适应周末/节假日/16:20 上游落地前运行）
     TRADE_DATE="$(ls "$MARKET_DIR"/*.parquet | sed 's:.*/::; s:\.parquet$::' | sort | tail -1)"
     TODAY="$(date +%F)"
     if [ "$TRADE_DATE" != "$TODAY" ]; then
@@ -193,7 +193,7 @@ main() {
         [ -n "$FAILED" ] && echo "失败环节:$FAILED"
         echo
         echo "排查建议:"
-        echo "  1. 确认已过 16:16 且当日行情已落地:"
+        echo "  1. 确认已过 16:20（上游 com.stock-doctor.daily-fetch-early）且当日行情已落地:"
         echo "     ls $DATA_DIR/market/daily/$TRADE_DATE.parquet $DATA_DIR/daily_basic/$TRADE_DATE.parquet"
         echo "  2. 查看完整日志:"
         echo "     tail -80 $LOG_FILE"

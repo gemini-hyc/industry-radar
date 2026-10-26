@@ -6,7 +6,7 @@
 #  无人值守必需的判断，职责严格分离：
 #    1. 非交易日 → 直接跳过（不做无意义空跑）
 #    2. 上游数据（market/daily + daily_basic 当日文件）未落地 → 本次跳过，
-#       等下一次触发；若已是当日最后一次触发（≥21:00）仍无数据 → 告警
+#       等下一次触发；若已是当日最后一次触发（时刻从 plist 读，见 §0）仍无数据 → 告警
 #    3. 当日已成功执行过 → 幂等退出（配合 plist 的多次触发实现「自动重试」）
 #    4. 调用十步链（SCHEDULED=1 静默模式，不弹 TextEdit）
 #    5. 读 completeness_status.json 核对结果（除退出码外的第二道判据）
@@ -42,6 +42,39 @@ notify() {  # $1=标题 $2=正文（macOS 通知中心，LaunchAgent 在 GUI 域
     /usr/bin/osascript -e "display notification \"$2\" with title \"$1\" sound name \"Basso\"" >/dev/null 2>&1 || true
 }
 
+# ── 0. 当日最后一档触发时刻（**从 plist 推导，勿写死**）──
+#    踩过的坑：plist 在 2026-10-19 把三档从 19:30/20:00/20:30/21:00 后移到
+#    22:00/22:30/23:00，而本脚本仍写死「≥21:00 即最后一档」⇒ 第一档 22:00
+#    就误报「已达当日最后一次触发」，等于把一个「今晚真的没数据」的信号
+#    稀释成每天必响的噪音。告警一旦天天响，就没人看了。
+#    故改为直接读 plist 的 StartCalendarInterval 取最晚一档；读不到（plist
+#    被移走/改装）才回落 DEFAULT_LAST_HM。这样调度配置只有一个来源。
+PLIST="$HOME/Library/LaunchAgents/com.industry-radar.daily.plist"
+DEFAULT_LAST_HM="2300"                       # 与 plist 当前最晚一档一致
+
+resolve_last_hm() {                          # 输出 HHMM；失败则输出空
+    [ -f "$PLIST" ] || return 0
+    local n i h m hm best=""
+    n="$(/usr/libexec/PlistBuddy -c "Print :StartCalendarInterval" "$PLIST" 2>/dev/null \
+         | grep -c 'Dict')"
+    [ "${n:-0}" -ge 1 ] 2>/dev/null || return 0
+    for ((i = 0; i < n; i++)); do
+        h="$(/usr/libexec/PlistBuddy -c "Print :StartCalendarInterval:$i:Hour"   "$PLIST" 2>/dev/null)" || continue
+        m="$(/usr/libexec/PlistBuddy -c "Print :StartCalendarInterval:$i:Minute" "$PLIST" 2>/dev/null)" || continue
+        [ -n "$h" ] && [ -n "$m" ] || continue
+        hm="$(printf '%02d%02d' "$h" "$m")" || continue
+        if [ -z "$best" ] || [ "$hm" -gt "$best" ]; then best="$hm"; fi
+    done
+    printf '%s' "$best"
+}
+
+LAST_HM="$(resolve_last_hm)"
+if [ -z "$LAST_HM" ]; then
+    LAST_HM="$DEFAULT_LAST_HM"
+    log "⚠️  无法从 plist 解析调度时刻，回落默认最后一档 ${LAST_HM:0:2}:${LAST_HM:2:2}"
+fi
+log "ℹ️  当日最后一档触发时刻: ${LAST_HM:0:2}:${LAST_HM:2:2}（来源: ${PLIST}）"
+
 # ── 1. 解析数据根目录（与 src/paths.py 保持一致）──
 DATA_DIR="$("$PY" -c "import sys; sys.path.insert(0, '$PROJECT_DIR'); import src.paths; print(src.paths.DATA_DIR)" 2>/dev/null)" || DATA_DIR=""
 if [ -z "$DATA_DIR" ]; then
@@ -75,10 +108,13 @@ fi
 # ── 4. 上游数据就绪检查 ──
 if [ ! -f "$DATA_DIR/market/daily/$TODAY.parquet" ] || [ ! -f "$DATA_DIR/daily_basic/$TODAY.parquet" ]; then
     log "⏳ 今日 $TODAY 行情/市值尚未落地，本次跳过（等待下一次触发）"
-    # 21:00 是当日最后一次触发：此时仍无数据说明上游拉取出了问题
-    if [ "$(date +%H)" -ge 21 ]; then
-        log "❌ 已达当日最后一次触发（≥21:00），上游数据仍未落地"
-        notify "行业日更未执行" "$TODAY 上游数据未落地，今日跳过。请检查 18:30 数据拉取。"
+    # 比较到分钟（10# 强制十进制，避免 09xx 被当成非法八进制）。
+    # LAST_HM 来自 plist（§0），不再写死，故改调度时间不会让本判断失真。
+    NOW_HM="$(date +%H%M)"
+    if [ "$((10#$NOW_HM))" -ge "$((10#$LAST_HM))" ]; then
+        log "❌ 已达当日最后一次触发（≥${LAST_HM:0:2}:${LAST_HM:2:2}），上游数据仍未落地"
+        notify "行业日更未执行" \
+            "$TODAY 上游数据未落地，今日跳过。请检查上游行情拉取（market/daily + daily_basic）。"
     fi
     exit 0
 fi

@@ -3,7 +3,7 @@
 行业因子日频增量更新
 ===================
 每天运行一次，追加最新交易日的 ind_crowd_turnover 因子值。
-运行时机: 共享数据源的日线拉取完成后 (16:16 CST 之后)
+运行时机: 上游日线拉取完成后（`com.stock-doctor.daily-fetch-early` 交易日 16:20）
 
 输入:
   - market/daily/ (最新日线)
