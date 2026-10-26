@@ -30,8 +30,8 @@ import numpy as np
 from math import sqrt, erf
 from pathlib import Path
 
-DATA_DIR = Path("/Users/hyc/.hermes/quant/data/industry")
-OUT_DIR  = Path("/Users/hyc/.hermes/quant/output")
+DATA_DIR = Path("/Users/hyc/quant-data/industry")
+OUT_DIR  = Path("/Users/hyc/quant-data/output")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 CSV_PATH = DATA_DIR / "wake_pure_backtest_detail.csv"
 

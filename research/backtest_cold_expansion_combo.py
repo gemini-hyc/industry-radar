@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-DATA_DIR = '/Users/hyc/.hermes/quant/data'
+DATA_DIR = '/Users/hyc/quant-data'
 IND_DAILY_PATH = f'{DATA_DIR}/industry/industry_daily_full.parquet'
 
 SIGNAL_START = '2020-07-01'  # 热启动后

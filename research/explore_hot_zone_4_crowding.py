@@ -18,7 +18,7 @@ import pandas as pd
 import numpy as np
 import os
 
-DATA_DIR = "/Users/hyc/.hermes/quant/data"
+DATA_DIR = "/Users/hyc/quant-data"
 os.makedirs(f"{DATA_DIR}/factors", exist_ok=True)
 
 # ── 加载行业日频数据 ──

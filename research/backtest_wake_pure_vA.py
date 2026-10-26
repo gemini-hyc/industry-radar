@@ -21,7 +21,7 @@ WAKE_DELTA     = 0.12   # C2
 WAKE_PCT       = 1.5    # C3
 WAKE_AMT_RATIO = 1.15   # C4
 HOLD_DAYS      = [5, 10, 20]
-DATA_PATH      = "/Users/hyc/.hermes/quant/data/industry/industry_daily_full.parquet"
+DATA_PATH      = "/Users/hyc/quant-data/industry/industry_daily_full.parquet"
 COOLDOWN_DAYS  = 20     # 同一行业两次唤醒最短间隔
 
 # ── 统计工具 ──────────────────────────────────
@@ -256,6 +256,6 @@ else:
     print("  样本不足5个，无法得出可靠结论")
 
 # ── 保存 ──────────────────────────────────────
-out_path = "/Users/hyc/.hermes/quant/data/industry/wake_pure_backtest_detail.csv"
+out_path = "/Users/hyc/quant-data/industry/wake_pure_backtest_detail.csv"
 df_results.to_csv(out_path, index=False)
 print(f"\n明细已保存 → {out_path}")

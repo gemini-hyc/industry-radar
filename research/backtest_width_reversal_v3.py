@@ -28,7 +28,7 @@ import pandas as pd
 from scipy import stats
 
 # ── 路径 ──
-DATA_DIR = '/Users/hyc/.hermes/quant/data'
+DATA_DIR = '/Users/hyc/quant-data'
 IND_DAILY_PATH = f'{DATA_DIR}/industry/industry_daily_full.parquet'
 
 

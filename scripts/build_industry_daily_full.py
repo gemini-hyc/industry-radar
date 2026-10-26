@@ -3,7 +3,7 @@
 构建行业日频全量数据集 industry_daily_full.parquet
 
 数据链: market/daily 全历史 + PIT 成分快照 → compute_concept_daily 聚合
-背景: 原数据集为 hermes 时期 ad-hoc 产出（无代码生成器，2026-08-06 后断更），
+背景: 原数据集为早期 ad-hoc 产出（无代码生成器，2026-08-06 后断更），
 本脚本补上生成器，供 mainline_detector / 回测脚本使用。
 
 成分口径（2026-10-01 修订）:

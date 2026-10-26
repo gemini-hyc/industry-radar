@@ -22,8 +22,8 @@ import numpy as np
 from math import sqrt, erf
 from pathlib import Path
 
-DATA_DIR  = Path("/Users/hyc/.hermes/quant/data/industry")
-OUT_DIR   = Path("/Users/hyc/.hermes/quant/output")
+DATA_DIR  = Path("/Users/hyc/quant-data/industry")
+OUT_DIR   = Path("/Users/hyc/quant-data/output")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def ttest_1samp(x, popmean=0):
@@ -133,7 +133,7 @@ print("\n计算持有期收益...")
 
 # 构建行业日收益查找表
 # 使用原始回测数据中的已有收益（更精确）
-bt = pd.read_csv("/Users/hyc/.hermes/quant/data/industry/wake_pure_backtest_detail.csv")
+bt = pd.read_csv("/Users/hyc/quant-data/industry/wake_pure_backtest_detail.csv")
 bt['wake_date'] = pd.to_datetime(bt['wake_date'])
 
 # 从raw数据计算行业累计收益（用于不在回测中的新事件）

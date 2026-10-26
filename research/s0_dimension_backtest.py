@@ -23,8 +23,8 @@ from pathlib import Path
 from itertools import combinations
 
 # ─── 路径 ───
-DATA_DIR  = Path("/Users/hyc/.hermes/quant/data/industry")
-OUT_DIR   = Path("/Users/hyc/.hermes/quant/output")
+DATA_DIR  = Path("/Users/hyc/quant-data/industry")
+OUT_DIR   = Path("/Users/hyc/quant-data/output")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 CSV_PATH  = DATA_DIR / "wake_pure_backtest_detail.csv"
 

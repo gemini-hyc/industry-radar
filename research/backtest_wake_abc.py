@@ -27,8 +27,8 @@ WAKE_AMT_RATIO = 1.15   # C4 放量下限
 WAKE_AVG_BW5   = 0.50   # C0 前5日平均breadth上限
 HOLD_DAYS      = [5, 10, 20]
 COOLDOWN_DAYS  = 20
-DATA_PATH      = Path("/Users/hyc/.hermes/quant/data/industry/industry_daily_full.parquet")
-OUT_PATH       = Path("/Users/hyc/.hermes/quant/data/industry/wake_abc_detail.csv")
+DATA_PATH      = Path("/Users/hyc/quant-data/industry/industry_daily_full.parquet")
+OUT_PATH       = Path("/Users/hyc/quant-data/industry/wake_abc_detail.csv")
 
 # ── 统计工具 ──────────────────────────────────
 def ttest_1samp(x, popmean=0):

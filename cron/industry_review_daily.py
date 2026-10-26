@@ -3,7 +3,8 @@
 用法: python3 cron/industry_review_daily.py [--date YYYY-MM-DD]
 
 前置依赖:
-  - 日线行情已由共享数据源的 tushare fetch 任务更新（openclaw 16:16）
+  - 日线行情已由上游任务更新（launchd `com.stock-doctor.daily-fetch-early`，交易日 16:20；
+    18:30 的 `daily-update` 以 --days 7 自愈窗口补漏。旧注释写的「openclaw 16:16」已不存在）
   - 行业加权涨跌幅已更新 (scripts/compute_weighted_returns.py)
   - 拥挤度因子已更新 (scripts/update_industry_factor.py)
 
@@ -20,17 +21,19 @@ from pathlib import Path
 
 
 def _find_project_root() -> Path:
-    """自动探测项目根目录（本仓库优先，回退 hermes 旧仓库）"""
-    # 优先从当前文件推断
+    """自动探测项目根目录（仅本仓库，不回退任何旧仓库路径）
+
+    从本文件位置推断（cron/ 的上一级）并校验仓库标志文件存在；
+    校验失败直接报错，避免静默落到别的仓库上、用错数据根。
+    """
+    marker = Path("src") / "daily_review" / "module_02_industry.py"
     candidate = Path(__file__).resolve().parent.parent
-    if (candidate / "src" / "daily_review" / "module_02_industry.py").exists():
+    if (candidate / marker).exists():
         return candidate
-    # 回退到已知路径
-    for p in ["/Users/hyc/Quant/industry-radar", "/Users/hyc/.hermes/quant"]:
-        pp = Path(p)
-        if (pp / "src" / "daily_review" / "module_02_industry.py").exists():
-            return pp
-    return candidate
+    raise RuntimeError(
+        f"无法定位 industry-radar 项目根：{candidate} 下缺少 {marker}。"
+        "请从仓库内运行本脚本。"
+    )
 
 
 def _detect_python() -> str:

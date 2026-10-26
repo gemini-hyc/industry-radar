@@ -135,7 +135,7 @@ TOLERATED_MISSING: dict[str, dict[str, str]] = {
 }
 
 # 被测产物 → 文件路径。以 ARTIFACTS 登记表为真相来源（铁律：新增产物必须登记）。
-# 只挑**有稳定结构语义**的产物；`industry_daily_cache`（Hermes 废弃流水线产物）
+# 只挑**有稳定结构语义**的产物；`industry_daily_cache`（早期废弃流水线产物）
 # 有意**不纳入**：它的存亡取决于是否停掉那条流水线，不该成为回归门槛。
 UNDER_TEST: dict[str, Path] = {
     name: ARTIFACTS[name][0]

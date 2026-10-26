@@ -37,7 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))  # 兼容脚本直跑: python3 src/daily_review/module_02_industry.py
 from src.paths import DATA_DIR, INDUSTRY_DIR
-from src.utils.provenance import save_dataframe, save_text
+from src.utils.provenance import save_text
 
 # 数据路径常量
 WEIGHTED_RETURNS_PATH = DATA_DIR / "industry" / "industry_weighted_returns.parquet"
@@ -45,7 +45,6 @@ INDUSTRY_MEMBERS_PATH = DATA_DIR / "industry" / "industry_members.parquet"
 INDUSTRY_LIST_PATH = DATA_DIR / "industry" / "industry_list.parquet"
 MARKET_DAILY_DIR = DATA_DIR / "market" / "daily"
 CROWDING_PATH = DATA_DIR / "factors" / "ind_crowd_turnover_daily.parquet"
-INDUSTRY_DAILY_CACHE = DATA_DIR / "industry" / "industry_daily.parquet"
 REPORTS_DIR = DATA_DIR / "reports" / "daily-analysis"
 
 
@@ -85,9 +84,6 @@ def get_recent_trade_dates(n: int, end_date: str = None) -> List[str]:
 def check_prerequisites(trade_date: str) -> Dict:
     """
     检查前置数据是否就绪（加权收益率 + 拥挤度因子）
-
-    注意：行业日频数据 (industry_daily.parquet) 是缓存，由 load_or_compute_industry_daily()
-    自动计算，不纳入前置检查。
 
     参数:
         trade_date: 目标交易日期 YYYY-MM-DD
@@ -159,66 +155,6 @@ def check_prerequisites(trade_date: str) -> Dict:
     result["all_ready"] = len(result["missing"]) == 0
 
     return result
-
-
-def load_or_compute_industry_daily(days: int = 60, end_date: str = None) -> pd.DataFrame:
-    """
-    加载或计算行业日频数据（宽度、涨跌幅、成交额），优先使用 Parquet 缓存
-
-    这是 run_wake_report.py 中 BayesianTracker.load_daily_data() 的轻量替代——
-    只产出 daily_data，不运行状态机。
-
-    返回:
-        DataFrame: date, con_code, avg_pct, total_amount, stock_n, breadth,
-                   breadth_ma13, avg_open, avg_close
-    """
-    # 检查缓存是否覆盖到目标日期
-    if INDUSTRY_DAILY_CACHE.exists():
-        cached = pd.read_parquet(INDUSTRY_DAILY_CACHE)
-        cached_dates = pd.DatetimeIndex(cached["date"].unique())
-        if len(cached_dates) > 0:
-            max_cached = cached_dates.max()
-            target = pd.Timestamp(end_date) if end_date else pd.Timestamp.now().normalize()
-            if max_cached >= target and len(cached_dates) >= min(days, 30):
-                return cached
-
-    # 缓存未命中 → 从原始行情数据计算
-    from src.utils.market_data import load_industry_members as _load_ind_members
-    from src.utils.market_data import load_recent_market, compute_concept_daily
-
-    members_dict = _load_ind_members()  # {ind_code: [stock_codes]}
-    mkt = load_recent_market(days=days, end_date=end_date)
-    daily = compute_concept_daily(mkt, members_dict)
-
-    if daily.empty:
-        return daily
-
-    # 替换为市值加权涨跌幅（与 BayesianTracker 保持一致）
-    if WEIGHTED_RETURNS_PATH.exists():
-        wr = pd.read_parquet(WEIGHTED_RETURNS_PATH)
-        wr["date"] = pd.to_datetime(wr["date"])
-        daily = daily.merge(
-            wr[["date", "ind_code", "weighted_pct"]],
-            left_on=["date", "con_code"],
-            right_on=["date", "ind_code"],
-            how="left",
-        )
-        mask = daily["weighted_pct"].notna()
-        daily.loc[mask, "avg_pct"] = daily.loc[mask, "weighted_pct"]
-        daily = daily.drop(columns=["ind_code", "weighted_pct"])
-
-    # 写入缓存（失败不阻塞主流程）
-    try:
-        save_dataframe(
-            daily, INDUSTRY_DAILY_CACHE,
-            producer="src/daily_review/module_02_industry.py",
-            params={"kind": "daily_cache"},
-            inputs=[WEIGHTED_RETURNS_PATH, MARKET_DAILY_DIR],
-        )
-    except Exception as e:
-        logging.warning("行业日频缓存写入跳过: %s", e)
-
-    return daily
 
 
 def aggregate_industry_amount(trade_date: str, members: pd.DataFrame = None) -> pd.DataFrame:
